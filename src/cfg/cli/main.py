@@ -120,6 +120,13 @@ def _parser() -> argparse.ArgumentParser:
     p_impact.add_argument("--llm", action="store_true")
     p_impact.add_argument("--provider")
     p_impact.add_argument("--model")
+    p_impact.add_argument(
+        "--against",
+        action="append",
+        metavar="RECORD",
+        help="reason the change against these records only (repeat, or comma-separate). "
+        "Without it, the whole system is used.",
+    )
 
     p_commit = sub.add_parser("commit")
     p_commit.add_argument("record")
@@ -206,6 +213,14 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
     if args.cmd == "impact":
         from cfg.interfaces.actions import impact
 
+        against = None
+        if args.against:
+            against = [
+                part.strip()
+                for entry in args.against
+                for part in str(entry).split(",")
+                if part.strip()
+            ] or None
         return impact(
             engine,
             args.record,
@@ -214,6 +229,7 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
             use_llm=args.llm,
             provider=args.provider,
             model=args.model,
+            against=against,
         )
 
     if args.cmd == "commit":

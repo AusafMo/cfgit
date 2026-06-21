@@ -13,7 +13,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Never use cross-project Mongo URIs for writes. Remote managed Mongo writes are forbidden unless the user explicitly grants a per-turn exception and asks for that exact target.
 - Treat `changed_outside_cfgit` as the central state. Do not commit over it. Run `cfg diff`, explain what changed, then `cfg adopt` if the user wants to fold that live state into history.
 - Prefer `--json` for agent parsing.
-- Use deterministic `cfg impact` first. Add `--llm` only when the user asks for LLM narration and the impact plugin is installed.
+- Use deterministic `cfg impact` first. Add `--llm` only when the user asks for LLM narration and the impact plugin is installed. Use `--against <collection:id>` when the user wants narration scoped to specific related records instead of the whole system.
 - In `authenticated` or `enforced` identity mode, the process must already have a verified identity source, usually `CFGIT_IDENTITY_TOKEN` or a per-user DB principal. `--author` and MCP `author` are hints only; cfgit rejects them if they do not match the verified identity.
 - Never paste raw human identity tokens into prompts, logs, commits, or history. For real setup secrets, prefer local CLI hashing: `printf '%s' '<private-token>' | cfg identity-hash --stdin`.
 
@@ -28,6 +28,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - `cfg diff <record> =HEAD =live --json`
    - `cfg log <record> --json`
    - `cfg impact <record> =HEAD =live --json`
+   - Scoped LLM review, when explicitly needed: `cfg impact <record> =HEAD =live --against <related-record> --llm --json`
 
 3. Mutate through cfgit.
    - Write the full target document to a temp JSON file.

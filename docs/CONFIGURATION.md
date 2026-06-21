@@ -197,7 +197,8 @@ links = [
 Fields:
 
 - `enabled`: reserved for deeper impact workflows.
-- `ai_provider`: default provider for `cfg impact --llm`.
+- `ai_provider`: default provider for `cfg impact --llm` (`claude`, `openai`, or
+  `gemini`).
 - `share_with_ai`: allowlist for LLM egress. Entries may be exact record ids
   (`agent_configs:agent_planner`), collection wildcards (`agent_configs:*`), or
   `*`.

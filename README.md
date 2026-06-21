@@ -9,6 +9,16 @@ the store, records what changed, and refuses to clobber changes it did not recor
 
 **Tagline:** a clean tool for dirty workflows. Git that does not make you move in.
 
+<p align="center">
+  <img src="docs/screenshots/01-diff.png" alt="Side-by-side line diff of a live agent config, with a sticky field header and collapsed context" width="32%" />
+  <img src="docs/screenshots/02-impact.png" alt="System-impact panel: deterministic facts plus opt-in LLM narration of what the change does downstream" width="32%" />
+  <img src="docs/screenshots/03-scoped-impact.png" alt="Scoped impact: select records on the left and reason the change against only those" width="32%" />
+</p>
+
+<p align="center">
+  <sub>Line-aligned diff of a live record &nbsp;·&nbsp; system-impact panel &nbsp;·&nbsp; impact scoped to the records you select &nbsp;(demo data)</sub>
+</p>
+
 ## Why cfgit exists
 
 Many teams keep runtime behavior in live database records: model routing, agent
@@ -255,8 +265,11 @@ Refs:
 ## Local UI
 
 `cfg ui` starts a localhost-only web UI over the same action layer as the CLI and
-MCP server. It can run status, diff, impact, commit, log, show, adopt, restore,
-tag, init, import, and fsck.
+MCP server. It reads like a git client: a collection-and-record tree on the left,
+a commit-graph history rail, and a line-aligned side-by-side diff that collapses
+unchanged context (expandable in place) and keeps the field name pinned while you
+scroll. It can run status, diff, impact, commit, log, show, adopt, restore, tag,
+init, import, and fsck, and ships dark and light themes.
 
 By default it binds to `127.0.0.1:8765` and tries the next free ports if needed:
 
@@ -294,6 +307,8 @@ Tools include:
 - `cfg_init`
 
 A portable skill lives at `skills/cfgit/SKILL.md`.
+`cfg_impact` accepts the same `against` list/string as the CLI `--against` flag,
+so MCP clients can request scoped narration without shelling out.
 
 ## Impact summaries
 
@@ -301,17 +316,35 @@ A portable skill lives at `skills/cfgit/SKILL.md`.
 paths, finds static references to changed values across configured records, and
 reports a risk level.
 
-Optional LLM narration lives in the separate `cfg-impact` plugin:
+Optional LLM narration lives in the separate `cfg-impact` plugin. It reads the
+real before/after of the change plus a map of the surrounding records, then
+explains in plain language what the change does, what it ripples into, and how to
+roll it back:
 
 ```bash
 pip install -e plugins/cfg_impact
 cfg impact agent_configs:agent_planner --llm --json
 ```
 
+By default the narration reasons against the whole system. To scope it to a few
+records you care about, pass `--against` (repeat it, or comma-separate). The model
+then reasons about the changed record against only those selected records; no
+unselected sibling record text leaves your machine:
+
+```bash
+cfg impact agent_configs:brief_classifier \
+  --against agent_configs:critic --against agent_configs:shot_breakdown --llm
+```
+
+In the web UI the same scoping is a click: select records in the left tree and the
+button reads `Impact (2)`, scoping the analysis to that set.
+
 Provider selection comes from `[connections].ai_provider` in `.cfg.toml`, unless
 you pass `--provider`. `--llm` is gated by `[connections].share_with_ai`; add
 the exact record id, `collection:*`, or `*` before any provider call. The plugin
-currently supports `claude` and `openai`.
+supports `claude`, `openai`, and `gemini`. API keys are read from the environment
+only (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`),
+never from the config file.
 
 The core package never imports LLM provider code or vendor SDKs. That boundary is
 tested.

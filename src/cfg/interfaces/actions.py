@@ -227,6 +227,7 @@ def impact(
     use_llm: bool = False,
     provider: str | None = None,
     model: str | None = None,
+    against: list[str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     try:
         from cfg_impact.overview import overview
@@ -234,7 +235,10 @@ def impact(
         raise ValueError(
             "cfg-impact plugin is not installed. Install plugins/cfg_impact or cfg-vcs[impact]."
         ) from exc
-    return overview(engine, record, a=a, b=b, use_llm=use_llm, provider=provider, model=model), EXIT_OK
+    return (
+        overview(engine, record, a=a, b=b, use_llm=use_llm, provider=provider, model=model, against=against),
+        EXIT_OK,
+    )
 
 
 def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None = None) -> tuple[Any, int]:
@@ -303,8 +307,27 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             use_llm=bool(payload.get("use_llm") or payload.get("llm")),
             provider=_blank_to_none(payload.get("provider")),
             model=_blank_to_none(payload.get("model")),
+            against=_as_record_list(payload.get("against")),
         )
     raise ValueError(f"unknown action: {name}")
+
+
+def _as_record_list(value: Any) -> list[str] | None:
+    """Parse an `against` selection from a list (MCP/JSON) or a comma/space string (form)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items = [part.strip() for part in value.replace("\n", ",").replace(" ", ",").split(",")]
+    elif isinstance(value, (list, tuple)):
+        items = [
+            part.strip()
+            for raw in value
+            for part in str(raw).replace("\n", ",").replace(" ", ",").split(",")
+        ]
+    else:
+        return None
+    items = [part for part in items if part]
+    return items or None
 
 
 def parse_record(raw: str | None) -> RecordRef:
