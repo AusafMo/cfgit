@@ -2,12 +2,12 @@
 
 Non-custodial version control for live datastore records.
 
+A clean tool for dirty workflows. Git that does not make you move in.
+
 cfgit gives git-shaped history, diff, rollback, tags, and drift reconciliation to
 records that already live in your database. Your application keeps reading the
 same database. Your scripts and admin tools can still write it. cfgit sits beside
 the store, records what changed, and refuses to clobber changes it did not record.
-
-**Tagline:** a clean tool for dirty workflows. Git that does not make you move in.
 
 <p align="center">
   <img src="docs/screenshots/01-diff.png" alt="Side-by-side line diff of a live agent config, with a sticky field header and collapsed context" width="32%" />
