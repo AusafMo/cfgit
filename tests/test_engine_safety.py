@@ -20,11 +20,13 @@ from cfg.core.config import (
     CollectionConfig,
     EnvConfig,
     HistoryConfig,
+    IdentityConfig,
     ProjectConfig,
     SecretsConfig,
 )
 from cfg.core.engine import Engine, RecordRef, SecretBlocked
 from cfg.core.hashing import hash_doc
+from cfg.core.identity import Identity
 
 
 def test_commit_refuses_secret_matches_before_history_write() -> None:
@@ -74,7 +76,32 @@ def test_secret_fields_are_stripped_instead_of_blocked() -> None:
 
     assert result[0]["state"] == "imported"
     assert "api_key" not in adapter.history[-1]["doc"]
-    assert adapter.history[-1]["meta"] == {}
+    assert set(adapter.history[-1]["meta"]) == {"identity"}
+
+
+def test_authenticated_identity_is_recorded_in_history_meta() -> None:
+    identity = Identity(
+        author="dev@example.com",
+        mode="authenticated",
+        source="token",
+        authenticated=True,
+        fingerprint="abc12",
+        principal="token:abc12",
+        credential="token:abc12",
+    )
+    engine, adapter = _engine(
+        records={("demo", "alpha"): {"id": "alpha", "value": 1}},
+        identity=identity,
+        identity_config=IdentityConfig(mode="authenticated"),
+    )
+
+    engine.commit(RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}, message="verified change")
+
+    meta = adapter.history[-1]["meta"]["identity"]
+    assert meta["author"] == "dev@example.com"
+    assert meta["authenticated"] is True
+    assert meta["source"] == "token"
+    assert meta["fingerprint"] == "abc12"
 
 
 def test_mutation_refuses_non_atomic_adapter() -> None:
@@ -136,6 +163,7 @@ class FakeAdapter:
         records: dict[tuple[str, str], dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
         heads: dict[tuple[str, str], dict[str, Any]] | None = None,
+        principal: str | None = None,
     ):
         self.project = project
         self.env_name = "dev"
@@ -143,6 +171,7 @@ class FakeAdapter:
         self.history = deepcopy(history or [])
         self.heads = deepcopy(heads or {})
         self.atomic = True
+        self.principal = principal
         self.clock = datetime(2026, 6, 21, tzinfo=timezone.utc)
 
     def get_record(self, collection: str, record_id: str) -> dict | None:
@@ -286,6 +315,9 @@ class FakeAdapter:
     def supports_transactions(self) -> bool:
         return self.atomic
 
+    def authenticated_principal(self) -> str | None:
+        return self.principal
+
     def now(self) -> datetime:
         return self.clock
 
@@ -297,6 +329,8 @@ def _engine(
     history: list[dict[str, Any]] | None = None,
     heads: dict[tuple[str, str], dict[str, Any]] | None = None,
     secrets: SecretsConfig | None = None,
+    identity: Identity | None = None,
+    identity_config: IdentityConfig | None = None,
 ) -> tuple[Engine, FakeAdapter]:
     coll = collection or CollectionConfig(name="demo", id_field="id")
     project = ProjectConfig(
@@ -304,11 +338,19 @@ def _engine(
         path=Path("/tmp/.cfg.toml"),
         history=HistoryConfig(),
         collections=(coll,),
-        envs={"dev": EnvConfig(name="dev", database="fake", uri="", db="test")},
+        envs={
+            "dev": EnvConfig(
+                name="dev",
+                database="fake",
+                uri="",
+                db="test",
+                identity=identity_config or IdentityConfig(),
+            )
+        },
         secrets=secrets or SecretsConfig(),
     )
     adapter = FakeAdapter(project=project, records=records, history=history, heads=heads)
-    return Engine(project, adapter, env="dev", author="dev@example.com"), adapter
+    return Engine(project, adapter, env="dev", author="dev@example.com", identity=identity), adapter
 
 
 def _history_row(

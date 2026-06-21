@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, time, timezone
-import getpass
 import json
-import os
 from pathlib import Path
-import subprocess
 from typing import Any
 
 from cfg.adapters.base import AtomicityUnavailable, AmbiguousConfig, NoSuchConfig, StaleHead, StaleLive
@@ -16,6 +13,7 @@ from cfg.core.authz import PermissionDenied, permission_role
 from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
 from cfg.core.engine import Engine, RecordRef, SecretBlocked
+from cfg.core.identity import IdentityError, resolve_identity, resolve_self_asserted_author
 
 
 @dataclass(frozen=True)
@@ -53,7 +51,8 @@ def engine_for_project(project: ProjectConfig, *, env_name: str, author: str | N
         adapter = PostgresAdapter(project=project, env_name=env_name)
     else:
         raise ValueError(f"unsupported database for v1 slice: {env.database}")
-    return Engine(project, adapter, env=env_name, author=resolve_author(author))
+    identity = resolve_identity(env, adapter, explicit_author=author)
+    return Engine(project, adapter, env=env_name, identity=identity)
 
 
 def envelope(fn, *args, **kwargs) -> dict[str, Any]:
@@ -67,6 +66,8 @@ def envelope(fn, *args, **kwargs) -> dict[str, Any]:
         return _error("changed_outside_cfgit", EXIT_DIRTY, exc)
     except PermissionDenied as exc:
         return _error("forbidden", EXIT_FORBIDDEN, exc)
+    except IdentityError as exc:
+        return _error("identity_required", EXIT_FORBIDDEN, exc)
     except AtomicityUnavailable as exc:
         return _error("atomicity_unavailable", EXIT_STORAGE, exc)
     except NoSuchConfig as exc:
@@ -81,10 +82,13 @@ def whoami(engine: Engine) -> tuple[dict[str, Any], int]:
     env = engine.config.envs[engine.env]
     return {
         "author": engine.author,
+        "identity": engine.identity.history_meta(),
+        "identity_display": engine.identity.display,
         "env": engine.env,
         "database": env.database,
         "permission_role": permission_role(env.permissions, engine.author),
         "permission_mode": env.permissions.mode,
+        "identity_mode": env.identity.mode,
         "config_file": str(engine.config.path),
     }, EXIT_OK
 
@@ -369,17 +373,7 @@ def restore_exit_code(result: dict[str, Any]) -> int:
 
 
 def resolve_author(explicit: str | None = None) -> str:
-    if explicit:
-        return explicit
-    if os.environ.get("CFG_AUTHOR"):
-        return os.environ["CFG_AUTHOR"]
-    try:
-        out = subprocess.check_output(["git", "config", "user.email"], text=True).strip()
-        if out:
-            return out
-    except Exception:
-        pass
-    return getpass.getuser()
+    return resolve_self_asserted_author(explicit)
 
 
 def _doc(value: Any) -> dict[str, Any]:

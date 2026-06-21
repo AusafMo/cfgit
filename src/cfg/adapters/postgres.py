@@ -431,6 +431,13 @@ class PostgresAdapter:
     def supports_transactions(self) -> bool:
         return True
 
+    def authenticated_principal(self) -> str | None:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT current_user AS principal")
+            row = cur.fetchone()
+        principal = str(row["principal"] or "").strip()
+        return principal or None
+
     def now(self) -> datetime:
         return datetime.now(timezone.utc)
 

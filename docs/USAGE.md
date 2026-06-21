@@ -40,6 +40,29 @@ States:
 
 Exit code `2` means drift was found.
 
+## Identity
+
+In the default `open` mode, cfgit records your git email or explicit `--author`
+as attribution. In `authenticated` or `enforced` mode, cfgit verifies identity
+before mutating history.
+
+For token identity, each human keeps a private memorable string locally:
+
+```bash
+export CFGIT_IDENTITY_TOKEN='imkanyewest'
+cfg whoami
+```
+
+The raw string is never written to history. Configure only its full SHA-256 hash:
+
+```bash
+printf '%s' 'imkanyewest' | cfg identity-hash --stdin
+```
+
+History and `whoami` show the author plus a short fingerprint, such as
+`alice@example.com#abc12`. That fingerprint is display-only and cannot be used
+as a login token.
+
 ## Diff
 
 Compare saved HEAD to live:

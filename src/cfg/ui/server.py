@@ -481,7 +481,7 @@ UI_HTML = r"""<!doctype html>
       </div>
       <div class="grid">
         <label>Env<input id="env" value="dev" autocomplete="off"></label>
-        <label>Author<input id="author" autocomplete="off"></label>
+        <label>Author hint<input id="author" autocomplete="off"></label>
         <label class="wide">Config file<input id="configFile" autocomplete="off"></label>
       </div>
       <div class="actions">
@@ -608,7 +608,10 @@ UI_HTML = r"""<!doctype html>
       const schema = await fetch("/api/schema?" + params.toString()).then(r => r.json());
       const stateRes = await fetch("/api/state?" + params.toString()).then(r => r.json());
       if (stateRes.data && stateRes.data.whoami) {
-        document.getElementById("identity").textContent = `${stateRes.data.whoami.env} / ${stateRes.data.whoami.author}`;
+        const who = stateRes.data.whoami;
+        const ident = who.identity || {};
+        document.getElementById("identity").textContent =
+          `${who.env} / ${who.identity_display || who.author} / ${who.identity_mode || ident.mode || "open"}`;
       }
       if (schema.data && !document.getElementById("configFile").value) {
         document.getElementById("configFile").placeholder = schema.data.config_file;

@@ -43,6 +43,23 @@ class PermissionConfig:
 
 
 @dataclass(frozen=True)
+class IdentityTokenConfig:
+    author: str
+    token_hash: str
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class IdentityConfig:
+    mode: str = "open"
+    sources: tuple[str, ...] = ("db_principal", "token")
+    token_env: str = "CFGIT_IDENTITY_TOKEN"
+    tokens: tuple[IdentityTokenConfig, ...] = ()
+    principal_map: dict[str, str] = field(default_factory=dict)
+    fingerprint_chars: int = 5
+
+
+@dataclass(frozen=True)
 class ConnectionsConfig:
     enabled: bool = False
     ai_provider: str = "openai"
@@ -69,6 +86,7 @@ class EnvConfig:
     history_uri: str | None = None
     history_db: str | None = None
     needs_approval: bool = False
+    identity: IdentityConfig = field(default_factory=IdentityConfig)
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
 
 
@@ -101,6 +119,7 @@ def load_config(path: str | Path | None = None) -> ProjectConfig:
 
     envs: dict[str, EnvConfig] = {}
     for name, data in (raw.get("env") or {}).items():
+        permission_raw, identity_raw = _split_identity_permissions(data)
         envs[name] = EnvConfig(
             name=name,
             database=str(data.get("database", "")),
@@ -111,7 +130,8 @@ def load_config(path: str | Path | None = None) -> ProjectConfig:
             history_uri=_resolve_optional_uri(data.get("history_uri"), env_name=name),
             history_db=str(data["history_db"]) if data.get("history_db") is not None else None,
             needs_approval=bool(data.get("needs_approval", False)),
-            permissions=_load_permissions(data.get("permissions") or {}),
+            identity=_load_identity(identity_raw),
+            permissions=_load_permissions(permission_raw),
         )
 
     history_raw = raw.get("history") or {}
@@ -169,6 +189,77 @@ def _load_permissions(data: dict[str, Any]) -> PermissionConfig:
         writers=tuple(str(x) for x in data.get("writers", ())),
         admin_actions=tuple(str(x) for x in data.get("admin_actions", ())),
     )
+
+
+def _load_identity(data: dict[str, Any]) -> IdentityConfig:
+    mode = str(data.get("mode", "open")).lower()
+    if mode not in {"open", "authenticated", "enforced"}:
+        raise ValueError("identity.mode must be open, authenticated, or enforced")
+    raw_sources = data.get("sources", data.get("source"))
+    if raw_sources is None:
+        sources = ("db_principal", "token")
+    elif isinstance(raw_sources, str):
+        sources = (raw_sources,)
+    else:
+        sources = tuple(str(item) for item in raw_sources)
+    for source in sources:
+        if source not in {"db_principal", "token"}:
+            raise ValueError("identity.sources may contain only db_principal or token")
+    fingerprint_chars = int(data.get("fingerprint_chars", 5))
+    if not 4 <= fingerprint_chars <= 12:
+        raise ValueError("identity.fingerprint_chars must be between 4 and 12")
+    return IdentityConfig(
+        mode=mode,
+        sources=sources,
+        token_env=str(data.get("token_env", "CFGIT_IDENTITY_TOKEN")),
+        tokens=tuple(_load_identity_token(item) for item in _identity_token_items(data)),
+        principal_map={str(k): str(v) for k, v in dict(data.get("principal_map") or {}).items()},
+        fingerprint_chars=fingerprint_chars,
+    )
+
+
+def _load_identity_token(data: dict[str, Any]) -> IdentityTokenConfig:
+    author = str(data.get("author") or "").strip()
+    token_hash = str(data.get("sha256") or data.get("hash") or data.get("token_hash") or "").strip()
+    if not author or not token_hash:
+        raise ValueError("identity token entries require author and sha256/hash")
+    return IdentityTokenConfig(
+        author=author,
+        token_hash=_normalize_token_hash(token_hash),
+        name=str(data["name"]) if data.get("name") is not None else None,
+    )
+
+
+def _identity_token_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = data.get("tokens", data.get("token", ()))
+    if isinstance(raw, dict):
+        return [raw]
+    return [dict(item) for item in raw]
+
+
+def _normalize_token_hash(value: str) -> str:
+    raw = value.lower()
+    if raw.startswith("sha256:"):
+        hex_value = raw[7:]
+    else:
+        hex_value = raw
+        raw = f"sha256:{raw}"
+    if len(hex_value) != 64 or any(ch not in "0123456789abcdef" for ch in hex_value):
+        raise ValueError("identity token hash must be a sha256:<64 hex> value")
+    return raw
+
+
+def _split_identity_permissions(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    permissions = dict(data.get("permissions") or {})
+    identity = dict(data.get("identity") or {})
+    if data.get("identity_mode") is not None and identity.get("mode") is None:
+        identity["mode"] = data["identity_mode"]
+
+    permission_mode = str(permissions.get("mode", "open")).lower()
+    if permission_mode in {"authenticated", "enforced"}:
+        identity.setdefault("mode", permission_mode)
+        permissions["mode"] = "restricted"
+    return permissions, identity
 
 
 def _load_connections(data: dict[str, Any]) -> ConnectionsConfig:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cfg.core.identity import MIN_TOKEN_LENGTH, hash_token
 from cfg.interfaces import actions
 from cfg.interfaces.actions import ActionContext
 
@@ -230,6 +231,34 @@ def cfg_tag(
 @mcp.tool()
 def cfg_fsck(config_file: str | None = None, env: str = "dev", author: str | None = None) -> dict[str, Any]:
     return _call("fsck", {}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_identity_hash(token: str) -> dict[str, Any]:
+    """Hash a private identity token for .cfg.toml setup.
+
+    Prefer the local CLI for real human secrets:
+    `printf '%s' '<token>' | cfg identity-hash --stdin`.
+    """
+    raw = token.strip()
+    if len(raw) < MIN_TOKEN_LENGTH:
+        return {
+            "status": "error",
+            "code": actions.EXIT_ARG,
+            "message": f"identity token must be at least {MIN_TOKEN_LENGTH} characters",
+            "data": None,
+        }
+    hashed = hash_token(raw)
+    return {
+        "status": "ok",
+        "code": actions.EXIT_OK,
+        "message": "",
+        "data": {
+            "sha256": hashed,
+            "fingerprint": hashed[7:12],
+            "warning": "the raw token passed to this MCP tool may be visible to the MCP client; prefer local CLI for real secrets",
+        },
+    }
 
 
 def _call(

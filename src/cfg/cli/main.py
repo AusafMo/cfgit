@@ -5,11 +5,9 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, time, timezone
-import getpass
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 from typing import Any
 
@@ -18,6 +16,7 @@ from cfg.core.authz import PermissionDenied, permission_role
 from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
 from cfg.core.engine import Engine, RecordRef, SecretBlocked
+from cfg.core.identity import IdentityError, hash_token, resolve_identity
 
 
 EXIT_OK = 0
@@ -48,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             open_browser=not args.no_open,
         )
+    if args.cmd == "identity-hash":
+        try:
+            token = _identity_hash_input(args)
+            hashed = hash_token(token)
+            _emit({"sha256": hashed, "fingerprint": hashed[7:12]}, json_mode=args.json)
+            return EXIT_OK
+        except ValueError as exc:
+            _emit_error("error", str(exc), args)
+            return EXIT_ARG
     try:
         project = load_config(args.config_file)
         engine = _engine(project, args.env, author=args.author)
@@ -62,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_DIRTY
     except PermissionDenied as exc:
         _emit_error("forbidden", str(exc), args)
+        return EXIT_FORBIDDEN
+    except IdentityError as exc:
+        _emit_error("identity_required", str(exc), args)
         return EXIT_FORBIDDEN
     except AtomicityUnavailable as exc:
         _emit_error("atomicity_unavailable", str(exc), args)
@@ -143,6 +154,10 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("fsck")
 
+    p_identity_hash = sub.add_parser("identity-hash")
+    p_identity_hash.add_argument("token", nargs="?")
+    p_identity_hash.add_argument("--stdin", action="store_true")
+
     p_ui = sub.add_parser("ui")
     p_ui.add_argument("--host", default="127.0.0.1")
     p_ui.add_argument("--port", type=int, default=8765)
@@ -160,10 +175,13 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         env = engine.config.envs[engine.env]
         return {
             "author": engine.author,
+            "identity": engine.identity.history_meta(),
+            "identity_display": engine.identity.display,
             "env": engine.env,
             "database": env.database,
             "permission_role": permission_role(env.permissions, engine.author),
             "permission_mode": env.permissions.mode,
+            "identity_mode": env.identity.mode,
         }, EXIT_OK
 
     if args.cmd == "import":
@@ -290,7 +308,8 @@ def _engine(project: ProjectConfig, env_name: str, *, author: str | None) -> Eng
     else:
         raise ValueError(f"unsupported database for v1 slice: {env.database}")
 
-    return Engine(project, adapter, env=env_name, author=_author(author))
+    identity = resolve_identity(env, adapter, explicit_author=author)
+    return Engine(project, adapter, env=env_name, identity=identity)
 
 
 def _parse_record(raw: str | None) -> RecordRef:
@@ -387,18 +406,14 @@ def _restore_exit_code(result: dict[str, Any]) -> int:
     return EXIT_OK
 
 
-def _author(explicit: str | None = None) -> str:
-    if explicit:
-        return explicit
-    if os.environ.get("CFG_AUTHOR"):
-        return os.environ["CFG_AUTHOR"]
-    try:
-        out = subprocess.check_output(["git", "config", "user.email"], text=True).strip()
-        if out:
-            return out
-    except Exception:
-        pass
-    return getpass.getuser()
+def _identity_hash_input(args: argparse.Namespace) -> str:
+    if args.stdin:
+        token = sys.stdin.read().strip()
+    else:
+        token = args.token or ""
+    if not token:
+        raise ValueError("identity-hash needs a token argument or --stdin")
+    return token
 
 
 def _load_dotenv(path: Path) -> None:

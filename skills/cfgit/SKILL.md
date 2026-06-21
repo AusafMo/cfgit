@@ -14,12 +14,15 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Treat `changed_outside_cfgit` as the central state. Do not commit over it. Run `cfg diff`, explain what changed, then `cfg adopt` if the user wants to fold that live state into history.
 - Prefer `--json` for agent parsing.
 - Use deterministic `cfg impact` first. Add `--llm` only when the user asks for LLM narration and the impact plugin is installed.
+- In `authenticated` or `enforced` identity mode, the process must already have a verified identity source, usually `CFGIT_IDENTITY_TOKEN` or a per-user DB principal. `--author` and MCP `author` are hints only; cfgit rejects them if they do not match the verified identity.
+- Never paste raw human identity tokens into prompts, logs, commits, or history. For real setup secrets, prefer local CLI hashing: `printf '%s' '<private-token>' | cfg identity-hash --stdin`.
 
 ## Workflow
 
 1. Identify the env and record.
    - Record syntax is `collection:id`, for example `agent_configs:agent_planner`.
    - Use `cfg whoami --json` and `cfg status --json`.
+   - In `whoami`, check `identity_mode`, `identity.authenticated`, and `identity_display`. A short fingerprint such as `#abc12` is display-only, not proof.
 
 2. Inspect before mutation.
    - `cfg diff <record> =HEAD =live --json`
@@ -30,6 +33,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - Write the full target document to a temp JSON file.
    - Run `cfg commit <record> --from <file> -m "<message>" --json`.
    - If commit returns `changed_outside_cfgit`, stop and inspect drift.
+   - If the result is `identity_required` or `forbidden`, do not retry with another author's string. Ask the user to provide the correct token/DB principal or change permissions.
 
 4. Reconcile drift.
    - `cfg diff <record> =HEAD =live --json`
@@ -56,5 +60,6 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_fsck`
 - `cfg_whoami`
 - `cfg_init`
+- `cfg_identity_hash` for setup only. Prefer the local CLI for real tokens because MCP clients may log tool inputs.
 
 Every MCP tool returns the same envelope shape as the CLI exit status: `status`, `code`, `message`, `data`.

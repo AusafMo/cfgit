@@ -50,6 +50,7 @@ cfgit is pre-1.0 software. The current implementation includes:
 - MongoDB adapter
 - Postgres adapter
 - local author permission checks
+- per-environment identity modes with hashed token or DB-principal verification
 - system restore by tag or timestamp
 - localhost web UI
 - MCP server
@@ -136,6 +137,9 @@ database = "mongo"
 uri = "env:DEV_MONGODB_URI"
 db = "my-dev-db"
 needs_approval = false
+
+[env.dev.identity]
+mode = "open"
 
 [env.dev.permissions]
 mode = "open"
@@ -340,7 +344,8 @@ Important safety properties:
 - mutating operations use adapter-level compare-and-swap checks
 - commits refuse to clobber live drift
 - system restore supports dry runs
-- local author permissions can restrict high-blast-radius actions
+- per-environment identity can stay open or require verified token/DB-principal identity
+- local permissions can restrict high-blast-radius actions
 - secret fields can be stripped from stored history
 - core imports no DB drivers and no LLM providers
 
@@ -352,6 +357,7 @@ against a safe environment.
 
 - [docs/USAGE.md](docs/USAGE.md): command flows and examples
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md): `.cfg.toml` reference
+- [docs/IDENTITY_AND_ATTRIBUTION.md](docs/IDENTITY_AND_ATTRIBUTION.md): identity modes and attribution limits
 - [docs/ADAPTERS.md](docs/ADAPTERS.md): Mongo and Postgres adapter details
 - [docs/AGENTS.md](docs/AGENTS.md): MCP, skill, and impact plugin usage
 - [docs/SPEC_CORE.md](docs/SPEC_CORE.md): project framing and v1 scope
