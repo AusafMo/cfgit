@@ -1,0 +1,16 @@
+[project]
+name = "cfg-impact"
+version = "0.0.0"
+description = "Optional system-impact analysis plugin for cfgit"
+requires-python = ">=3.11"
+dependencies = [
+  "cfg-vcs",
+  "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cfg_impact"]

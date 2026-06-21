@@ -1,0 +1,418 @@
+# Copyright 2026 Mohammad Ausaf. Licensed under the Apache License, Version 2.0.
+"""cfg CLI."""
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, time, timezone
+import getpass
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from typing import Any
+
+from cfg.adapters.base import AtomicityUnavailable, AmbiguousConfig, NoSuchConfig, StaleHead, StaleLive
+from cfg.core.authz import PermissionDenied, permission_role
+from cfg.core.config import ProjectConfig, load_config
+from cfg.core.diff import format_diff
+from cfg.core.engine import Engine, RecordRef, SecretBlocked
+
+
+EXIT_OK = 0
+EXIT_ARG = 1
+EXIT_DIRTY = 2
+EXIT_STORAGE = 3
+EXIT_FORBIDDEN = 4
+EXIT_NOT_FOUND = 5
+EXIT_INVARIANT = 6
+
+
+def main(argv: list[str] | None = None) -> int:
+    _load_dotenv(Path(".env"))
+    parser = _parser()
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    json_mode = "--json" in raw_argv
+    raw_argv = [item for item in raw_argv if item != "--json"]
+    args = parser.parse_args(raw_argv)
+    args.json = bool(args.json or json_mode)
+    if args.cmd == "ui":
+        from cfg.ui.server import run_ui
+
+        return run_ui(
+            config_file=args.config_file,
+            env=args.env,
+            author=args.author,
+            host=args.host,
+            port=args.port,
+            open_browser=not args.no_open,
+        )
+    try:
+        project = load_config(args.config_file)
+        engine = _engine(project, args.env, author=args.author)
+        result, code = _dispatch(engine, args)
+        _emit(result, json_mode=args.json)
+        return code
+    except AmbiguousConfig as exc:
+        _emit_error("bad_config", str(exc), args)
+        return EXIT_INVARIANT
+    except (StaleHead, StaleLive) as exc:
+        _emit_error("changed_outside_cfgit", str(exc), args)
+        return EXIT_DIRTY
+    except PermissionDenied as exc:
+        _emit_error("forbidden", str(exc), args)
+        return EXIT_FORBIDDEN
+    except AtomicityUnavailable as exc:
+        _emit_error("atomicity_unavailable", str(exc), args)
+        return EXIT_STORAGE
+    except NoSuchConfig as exc:
+        _emit_error("not_found", str(exc), args)
+        return EXIT_NOT_FOUND
+    except (SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
+        _emit_error("error", str(exc), args)
+        return EXIT_ARG
+    except Exception as exc:  # pragma: no cover - final CLI guard
+        _emit_error("error", str(exc), args)
+        return EXIT_STORAGE
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="cfg")
+    parser.add_argument("--config-file", default=None)
+    parser.add_argument("--env", default="dev")
+    parser.add_argument("--author", default=None)
+    parser.add_argument("--json", action="store_true")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("init")
+    sub.add_parser("whoami")
+
+    p_import = sub.add_parser("import")
+    p_import.add_argument("record", nargs="?")
+    p_import.add_argument("--all", action="store_true")
+    p_import.add_argument("-m", "--message", default="initial import")
+    p_import.add_argument("--allow-secret", action="store_true")
+
+    p_status = sub.add_parser("status")
+    p_status.add_argument("record", nargs="?")
+
+    p_diff = sub.add_parser("diff")
+    p_diff.add_argument("record")
+    p_diff.add_argument("a", nargs="?", default="=HEAD")
+    p_diff.add_argument("b", nargs="?", default="=live")
+
+    p_impact = sub.add_parser("impact")
+    p_impact.add_argument("record")
+    p_impact.add_argument("a", nargs="?", default="=HEAD")
+    p_impact.add_argument("b", nargs="?", default="=live")
+    p_impact.add_argument("--llm", action="store_true")
+    p_impact.add_argument("--provider")
+    p_impact.add_argument("--model")
+
+    p_commit = sub.add_parser("commit")
+    p_commit.add_argument("record")
+    p_commit.add_argument("--from", dest="from_file", required=True)
+    p_commit.add_argument("-m", "--message", required=True)
+    p_commit.add_argument("--allow-secret", action="store_true")
+
+    p_log = sub.add_parser("log")
+    p_log.add_argument("record")
+    p_log.add_argument("-n", "--limit", type=int, default=20)
+
+    p_show = sub.add_parser("show")
+    p_show.add_argument("record")
+    p_show.add_argument("ref")
+
+    p_adopt = sub.add_parser("adopt")
+    p_adopt.add_argument("record", nargs="?")
+    p_adopt.add_argument("--all", action="store_true")
+    p_adopt.add_argument("-m", "--message", required=True)
+    p_adopt.add_argument("--allow-secret", action="store_true")
+
+    p_restore = sub.add_parser("restore")
+    p_restore.add_argument("record", nargs="?")
+    p_restore.add_argument("ref", nargs="?")
+    p_restore.add_argument("--as-of", dest="as_of")
+    p_restore.add_argument("--tag", dest="tag")
+    p_restore.add_argument("--dry-run", action="store_true")
+    p_restore.add_argument("-m", "--message", required=True)
+
+    p_tag = sub.add_parser("tag")
+    p_tag.add_argument("name")
+
+    sub.add_parser("fsck")
+
+    p_ui = sub.add_parser("ui")
+    p_ui.add_argument("--host", default="127.0.0.1")
+    p_ui.add_argument("--port", type=int, default=8765)
+    p_ui.add_argument("--no-open", action="store_true")
+    return parser
+
+
+def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
+    if args.cmd == "init":
+        result = engine.init()
+        violations = result["invariant_violations"]
+        return _plain_init(result), EXIT_INVARIANT if violations else EXIT_OK
+
+    if args.cmd == "whoami":
+        env = engine.config.envs[engine.env]
+        return {
+            "author": engine.author,
+            "env": engine.env,
+            "database": env.database,
+            "permission_role": permission_role(env.permissions, engine.author),
+            "permission_mode": env.permissions.mode,
+        }, EXIT_OK
+
+    if args.cmd == "import":
+        if not args.all and not args.record:
+            raise ValueError("import needs --all or a record")
+        result = engine.import_records(
+            _parse_record(args.record) if args.record else None,
+            message=args.message,
+            allow_secret=args.allow_secret,
+        )
+        return result, EXIT_OK
+
+    if args.cmd == "status":
+        rows = engine.status(_parse_record(args.record) if args.record else None)
+        code = EXIT_DIRTY if any(r.state == "changed_outside_cfgit" for r in rows) else EXIT_OK
+        return rows, code
+
+    if args.cmd == "diff":
+        changes = engine.diff(_parse_record(args.record), args.a, args.b)
+        return {"changes": changes, "text": format_diff(changes)}, EXIT_OK
+
+    if args.cmd == "impact":
+        from cfg.interfaces.actions import impact
+
+        return impact(
+            engine,
+            args.record,
+            a=args.a,
+            b=args.b,
+            use_llm=args.llm,
+            provider=args.provider,
+            model=args.model,
+        )
+
+    if args.cmd == "commit":
+        doc = _load_json_file(args.from_file)
+        result = engine.commit(
+            _parse_record(args.record),
+            doc,
+            message=args.message,
+            allow_secret=args.allow_secret,
+        )
+        code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
+        return result, code
+
+    if args.cmd == "log":
+        return engine.log(_parse_record(args.record), limit=args.limit), EXIT_OK
+
+    if args.cmd == "show":
+        return engine.resolve_ref(_parse_record(args.record), args.ref), EXIT_OK
+
+    if args.cmd == "adopt":
+        if args.all:
+            results = []
+            for row in engine.status():
+                if row.state == "changed_outside_cfgit":
+                    result = engine.adopt(
+                        RecordRef(row.collection, row.record_id),
+                        message=args.message,
+                        allow_secret=args.allow_secret,
+                    )
+                    results.append({"collection": row.collection, "record_id": row.record_id, **result})
+            return results, EXIT_OK
+        if not args.record:
+            raise ValueError("adopt needs --all or a record")
+        return engine.adopt(
+            _parse_record(args.record),
+            message=args.message,
+            allow_secret=args.allow_secret,
+        ), EXIT_OK
+
+    if args.cmd == "restore":
+        if args.as_of and args.tag:
+            raise ValueError("restore accepts only one of --as-of or --tag")
+        if args.as_of:
+            if args.record or args.ref:
+                raise ValueError("restore --as-of restores all records; omit record and ref")
+            result = engine.restore_system_as_of(
+                _parse_when(args.as_of),
+                message=args.message,
+                dry_run=args.dry_run,
+            )
+            code = _restore_exit_code(result)
+            return result, code
+        if args.tag:
+            if args.record or args.ref:
+                raise ValueError("restore --tag restores all records; omit record and ref")
+            result = engine.restore_system_tag(args.tag, message=args.message, dry_run=args.dry_run)
+            code = _restore_exit_code(result)
+            return result, code
+        if args.dry_run:
+            raise ValueError("--dry-run is only supported with system restore")
+        if not args.record or not args.ref:
+            raise ValueError("restore needs record and ref, or --as-of/--tag")
+        result = engine.restore(_parse_record(args.record), args.ref, message=args.message)
+        code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
+        return result, code
+
+    if args.cmd == "tag":
+        return engine.tag(args.name), EXIT_OK
+
+    if args.cmd == "fsck":
+        return {
+            "invariant_violations": engine.adapter.check_runtime_invariant(),
+            "atomicity": engine.adapter.check_atomicity_scope(),
+            "reconcile": engine.adapter.reconcile(),
+        }, EXIT_OK
+
+    raise ValueError(f"unknown command: {args.cmd}")
+
+
+def _engine(project: ProjectConfig, env_name: str, *, author: str | None) -> Engine:
+    if env_name not in project.envs:
+        raise ValueError(f"unknown env: {env_name}")
+    env = project.envs[env_name]
+    if env.database == "mongo":
+        from cfg.adapters.mongo import MongoAdapter
+
+        adapter = MongoAdapter(project=project, env_name=env_name)
+    elif env.database == "postgres":
+        from cfg.adapters.postgres import PostgresAdapter
+
+        adapter = PostgresAdapter(project=project, env_name=env_name)
+    else:
+        raise ValueError(f"unsupported database for v1 slice: {env.database}")
+
+    return Engine(project, adapter, env=env_name, author=_author(author))
+
+
+def _parse_record(raw: str | None) -> RecordRef:
+    if not raw or ":" not in raw:
+        raise ValueError("record must be collection:id, for example agent_configs:agent_planner")
+    collection, record_id = raw.split(":", 1)
+    if not collection or not record_id:
+        raise ValueError("record must be collection:id")
+    return RecordRef(collection, record_id)
+
+
+def _load_json_file(path: str) -> dict[str, Any]:
+    with Path(path).open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("--from file must contain one JSON object")
+    return data
+
+
+def _parse_when(raw: str) -> datetime:
+    value = raw.strip()
+    date_only = len(value) == 10 and value[4] == "-" and value[7] == "-"
+    if date_only:
+        dt = datetime.combine(datetime.fromisoformat(value).date(), time.max)
+    else:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _emit(value: Any, *, json_mode: bool) -> None:
+    if json_mode:
+        print(json.dumps(_to_json(value), indent=2, sort_keys=True))
+        return
+    if isinstance(value, list):
+        for item in value:
+            print(_format_item(item))
+        return
+    if isinstance(value, dict) and "text" in value and "changes" in value:
+        print(value["text"])
+        return
+    print(_format_item(value))
+
+
+def _emit_error(status: str, message: str, args: argparse.Namespace) -> None:
+    if getattr(args, "json", False):
+        print(json.dumps({"status": status, "message": message}, indent=2), file=sys.stderr)
+    else:
+        print(f"{status}: {message}", file=sys.stderr)
+
+
+def _format_item(value: Any) -> str:
+    if is_dataclass(value):
+        value = asdict(value)
+    if isinstance(value, dict):
+        if {"collection", "record_id", "state"} <= set(value):
+            return f"{value['collection']}:{value['record_id']} {value['state']}"
+        if {"collection", "record_id", "seq", "oid"} <= set(value):
+            return f"{value['collection']}:{value['record_id']} @{value['seq']} {str(value['oid'])[:12]}"
+        return json.dumps(_to_json(value), sort_keys=True)
+    return str(value)
+
+
+def _to_json(value: Any) -> Any:
+    if is_dataclass(value):
+        return _to_json(asdict(value))
+    if isinstance(value, dict):
+        return {str(k): _to_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json(v) for v in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
+
+def _plain_init(result: dict[str, Any]) -> dict[str, Any]:
+    atomic = result["atomic"]
+    return {
+        "atomic": asdict(atomic) if is_dataclass(atomic) else atomic,
+        "invariant_violations": result["invariant_violations"],
+    }
+
+
+def _restore_exit_code(result: dict[str, Any]) -> int:
+    if result.get("state") == "blocked":
+        return EXIT_DIRTY
+    if result.get("state") == "partial":
+        return EXIT_STORAGE
+    return EXIT_OK
+
+
+def _author(explicit: str | None = None) -> str:
+    if explicit:
+        return explicit
+    if os.environ.get("CFG_AUTHOR"):
+        return os.environ["CFG_AUTHOR"]
+    try:
+        out = subprocess.check_output(["git", "config", "user.email"], text=True).strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    return getpass.getuser()
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

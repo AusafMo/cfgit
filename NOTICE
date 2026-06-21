@@ -1,0 +1,10 @@
+cfg: Config Version Control
+Copyright 2026 Mohammad Ausaf
+
+This product includes software developed as an original work, licensed under the
+Apache License, Version 2.0 (see LICENSE).
+
+This product reuses DESIGN CONCEPTS and command vocabulary (not source code) from
+Git (https://git-scm.com), which is licensed GPL-2.0. No Git source code is
+included or linked. See CREDITS.md for the full attribution table, including the
+semantic-diff prior art that informs the optional impact layer.

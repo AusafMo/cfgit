@@ -1,0 +1,54 @@
+[project]
+name = "cfg-vcs"
+version = "0.0.0"
+description = "Non-custodial version control for live datastore records"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Mohammad Ausaf" }]
+keywords = [
+  "version-control",
+  "database",
+  "datastore",
+  "configuration",
+  "mongodb",
+  "postgres",
+  "mcp",
+  "agents",
+]
+
+# Core has NO database driver and NO LLM SDK. That boundary is enforced in CI
+# (see [tool.cfg.ci] note below and SPEC section 1). Adapters/plugins bring their own deps
+# via extras.
+dependencies = [
+  "tomli; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+mongo = ["pymongo>=4.6"]
+postgres = ["psycopg[binary]>=3.2"]
+cli = ["click>=8.1", "rich>=13.0"]
+mcp = ["mcp>=1.0"]
+impact = []   # the cfg-impact plugin declares its own model-client deps; never in core
+dev = ["pytest>=8.0", "pytest-asyncio", "ruff", "mypy", "httpx>=0.27"]
+
+[project.scripts]
+cfg = "cfg.cli.main:main"
+cfg-mcp = "cfg.mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cfg"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# SPEC section 1 inviolable rule 1: core must not import a DB driver or LLM SDK.
+# Enforced by tests/test_core_purity.py (greps src/cfg/core for forbidden imports).

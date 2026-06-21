@@ -1,0 +1,99 @@
+# Your cfgit setup, described once. Keys read in plain English.
+# Copy to your repo root as .cfg.toml and edit. Put secrets ONLY in env vars (env:VAR).
+# Framing + v1 scope: docs/SPEC_CORE.md. Plain walk-through: docs/SPEC.md Part 1.
+
+[project]
+name = "aistudio-control-plane"
+
+# cfgit's own private history lives beside your store (you rarely touch these).
+[history]
+history_collection = "config_history"
+heads_collection   = "config_heads"
+
+# One [[collection]] block per live collection cfgit versions IN PLACE.
+# The app keeps reading these directly; cfgit never owns the reads or writes.
+
+[[collection]]                          # collection 1: the agent control plane
+name      = "agent_configs"             # the live collection the app reads
+id_field  = "config_id"                 # the stable id per record
+live_when = { is_active = true }        # which doc is "the live one" if several share an id
+ignore_fields   = ["_id", "metrics", "updated_at", "updated_by", "created_at", "created_by", "is_active"]
+ignore_patterns = ["instructions_backup_*"]   # old hand-made backup keys: ignore them
+secret_fields   = []                          # fields holding secrets: never stored in history, never sent anywhere
+
+[[collection]]                          # collection 2: the model router
+name      = "modelgarden_models"
+id_field  = "model_path"
+live_when = { }                         # Runtime and admin config paths key models by model_path. model_id is not unique in local dev data.
+ignore_fields   = ["_id", "updated_at", "updated_by"]
+secret_fields   = ["provider_config.api_key"]   # example: keep provider creds out of history
+
+[secrets]                               # stop a secret from being saved by accident
+block_fields = ["*_key", "*_secret", "*_token", "*api_key*", "*password*"]
+block_values = ["sk-[A-Za-z0-9]{20,}", "AKIA[0-9A-Z]{16}"]
+on_match     = "refuse"                 # refuse to save | warn ; override needs --allow-secret (logged)
+
+[author]
+from = "git"                            # who gets recorded as author (your git email)
+
+[connections]                           # ONLY needed for `cfg impact`: how one config depends on another
+enabled       = false                   # the structural part still works locally even when off
+share_with_ai = []                      # names of configs whose text may be sent to the AI for the "why" explanation
+ai_provider   = "claude"                # claude | openai | local
+warn_level    = "none"                  # none | breaking (when a pre-save check should flag a change)
+# "links" tells cfg which fields connect configs, so it can show what a change ripples into:
+links = [
+  { field = "phase_contract",   means = "a contract other configs rely on" },
+  { field = "tools",            means = "a tool several configs share" },
+  { field = "prompt_templates", means = "a template referenced across configs" },
+  { field = "fallback_models",  means = "a model another config falls back to" },
+  { field = "skills",           means = "a skill several configs share" },
+]
+
+[code_search]                           # where to grep when cfg checks if old keys are still used in code
+roots = ["../backend-repo/app"]
+
+# Each environment: which database, and whether changes need a human to approve.
+[env.dev]
+database = "mongo"
+uri = "env:DEV_MONGODB_URI"
+db = "appdb-dev"
+needs_approval = false
+[env.dev.permissions]
+mode = "open"                         # open | restricted
+admins = []                           # authors with every mutation permission
+writers = []                          # authors allowed to commit/adopt/tag/restore records
+admin_actions = ["restore_system"]    # system-wide restore can be admin-only when mode=restricted
+
+[env.prod]
+database = "mongo"
+uri = "env:PROD_MONGODB_URI"
+db = "appdb"
+needs_approval = true
+[env.prod.permissions]
+mode = "restricted"
+admins = ["owner@*", "admin@*"]
+writers = ["alice@*", "bob@*", "carol@*"]
+admin_actions = ["init", "restore_system"]
+[env.prod.rules]
+require_reason     = true       # every prod change must say why (a ticket/incident)
+require_clean      = true       # refuse if something was edited outside cfg; clean it up first
+emergency_override = false      # the break-glass switch, off by default
+confirm_word       = "prod"     # a human must type this word to approve
+
+[env.preview]
+database = "mongo"
+uri = "env:PREVIEW_MONGODB_URI"
+db = "appdb-preview"
+needs_approval = false
+
+# Optional Postgres proof env.
+# v1 expects each live table to have:
+# - the id column named by id_field
+# - scalar live_when columns, if any
+# - doc jsonb containing the full versioned record
+[env.postgres_local]
+database = "postgres"
+uri = "env:CFGIT_POSTGRES_URI"
+db = "cfgit_smoke"
+needs_approval = false

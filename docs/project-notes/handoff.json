@@ -1,0 +1,107 @@
+{
+  "project": "cfg",
+  "tagline": "Git-shaped version control for database-resident config documents",
+  "handoff_purpose": "Brief for a fresh Claude Code session to take over implementation. Read HANDOFF.md first (this is its machine-readable index).",
+  "status": {
+    "phase": "spec complete, build NOT started (per user: do not implement yet)",
+    "spec_version": "0.3.2",
+    "spec_path": "docs/SPEC.md",
+    "exit_gate": "GREEN — 4 adversarial rounds, no remaining Tier-0/Tier-1 defects",
+    "repo": "<repo> (standalone git repo, OUTSIDE backend-repo, branch main)"
+  },
+  "first_task_before_building": {
+    "instruction": "Read the actual backend-repo code to understand the real problem firsthand and confirm/flag the spec vs reality. Write FINDINGS.md. Only then build.",
+    "read_in_order": [
+      {"path": "<backend-repo>/app/services/agentic_v2/persona_loader.py", "why": "line ~92 db['agent_configs'].find_one({config_id, is_active:True}) is the runtime-authoritative read (live, per-build, no cache, no deploy). Confirm no cache, is_active selector, any other readers."},
+      {"path": "<backend-repo>/scripts/seed_agent_planner_shape.py", "why": "de-facto prototype of what cfg replaces: find_one({config_id,is_active:True})->update_one, prompt in sibling .txt, return 2 exit-code collision. Skim 3-4 other seed_*.py."},
+      {"path": "<backend-repo>/scripts/", "why": "19 seed_*.py + backfill_*.py scripts raw-write agent_configs = the daily workflow and adoption blocker cfg must absorb (apply-doc shim, SPEC §13)."},
+      {"path": "<backend-repo>/.env", "why": "MONGODB_URI, MONGODB_DB_NAME=appdb-dev. NOTE no PREVIEW/PROD URI yet; spec needs distinct DEV_/PREVIEW_/PROD_MONGODB_URI."},
+      {"path": "mongosh against appdb-dev (READ-ONLY, dev not prod)", "why": "inspect real agent_configs doc shape (~30 fields incl instructions ~28k chars, client_config, tools[7], skills, fallback_models, prompt_templates, phase_contract, default_options, plus instructions_backup_<ts> keys ~15 across 5 configs). Validate SPEC §7 edge_fields against reality."}
+    ]
+  },
+  "problem": {
+    "summary": "4 backend devs edit runtime-authoritative LLM agent configs in MongoDB agent_configs via raw Mongo writes through Claude Code scripts. DB overrides code; a write changes agent behavior instantly with no deploy.",
+    "pains": [
+      "Silent overwrites: no concurrency control, lost updates",
+      "No history/rollback: devs hand-paste instructions_backup_<timestamp> keys (~15 across 5 configs)",
+      "Invisible drift: dev/prod and DB-vs-intended drift silently"
+    ],
+    "anchor": "a teammate asked for a deploy preview of the June 7 config state after a behavior regression. cfg must make 'restore whole system to June 7' easy (emergent system restore)."
+  },
+  "people": {
+    "Maintainer": "backend+ML",
+    "a teammate": "applied AI, edits configs",
+    "another teammate": "applied AI, edits configs",
+    "the PM": "manager + PM, needs visibility (read-only/log surfaces matter)"
+  },
+  "decisions_made_do_not_relitigate": [
+    "Keep instant/no-deploy; gating adds a human checkpoint on prod, never latency",
+    "Asymmetric gating: dev ungated (95% of edits), prod gated via out-of-band human approval; org-level prod-cred lockdown is the real-world backstop (out of tool scope)",
+    "Runtime store stays dumb (current docs only); versioning in tool-owned config_history + config_heads; emergent via everyone using the tool",
+    "Storage-agnostic: core depends only on StorageAdapter + ApprovalProvider seams; Mongo first, Postgres = one adapter class; CI gate forbids DB driver / LLM SDK in core",
+    "Full-doc-per-version (no diff storage); bitemporal (recorded_at vs valid_from/valid_to)",
+    "Real CAS via config_heads HEAD pointer + atomic apply() that also CAS-checks live doc (expected_live_oid) so raw bypass fails closed",
+    "Agents propose/preview anything; applying to gated env always crosses a human (no agent-suppliable flag, no cfg.approve MCP tool)",
+    "License Apache-2.0; git command vocabulary reused as design idea only (no git source copied); semantic-diff prior art cited (CREDITS.md)"
+  ],
+  "rejected": ["building a general SaaS product", "branching/merging", "RBAC in tool", "output/vision evals", "diff storage"],
+  "differentiator": "System-impact analysis (SPEC §7): given a config change, report its NATURE and CONSEQUENCES across the whole agent graph (downstream contract breaks, cross-config conflicts, blast radius). Structural facts computed LOCALLY (no LLM, no egress); optional LLM narrates the why. Off-the-shelf tools diff a prompt string only.",
+  "scaffold": {
+    "build_contract": "docs/SPEC.md (v0.3.2)",
+    "key_starting_file": "src/cfg/adapters/base.py — full StorageAdapter Protocol (21 methods) + error types mapped to exit codes; implement MongoAdapter against it first",
+    "layout": {
+      "docs/SPEC.md": "spec (build contract)",
+      "docs/SPEC_v0.1.md": "original v0.1 (historical)",
+      "src/cfg/core/": "engine (NO db driver / NO llm sdk) — hashing/asof/engine/refs TO BUILD",
+      "src/cfg/adapters/base.py": "StorageAdapter Protocol stub (full surface)",
+      "src/cfg/approval/base.py": "ApprovalProvider Protocol stub",
+      "src/cfg/cli/main.py": "CLI entrypoint stub",
+      "src/cfg/mcp/": "MCP server TO BUILD",
+      "plugins/cfg_impact/": "impact plugin (kept OUT of core for license boundary)",
+      "examples/.cfg.toml": "real aistudio agent_configs shape, ready to copy",
+      "tests/test_core_purity.py": "enforces SPEC §1 (no DB/LLM import in core); RUNS, passes",
+      "LICENSE": "Apache-2.0",
+      "CREDITS.md / NOTICE": "attribution (git=idea-only; semantic-diff prior art)"
+    },
+    "verify_runs": [
+      "cd <repo> && PYTHONPATH=src python3 -c \"from cfg.adapters.base import StorageAdapter; print('ok')\"",
+      "pip install -e '.[dev]' && PYTHONPATH=src python3 -m pytest tests/ -q"
+    ]
+  },
+  "build_order_spec_section_17": [
+    "Stage 1: Core + MongoAdapter (replica-set) + schema (+valid_to) + co-location/txn checks + hashing + init(+invariant+atomicity-scope) + import + put_config/seed_config + status + commit(dual-CAS) + log(interval as-of) + show + diff",
+    "Stage 2: restore single + system (valid-time + --tag + --resume/plan_oid) + --dry-run + --preview(minimal) + activate + tag/points + fsck",
+    "Stage 3: approval flow (local then slack) + approve/deny/approvals + exit-4/7 split + gating/secret pre-flight + redact(+--rewrite-history) + force-routing",
+    "Stage 4: agent surface --json -> MCP (envelope incl cfg.impact) -> Claude skill",
+    "Stage 5: cfg apply-doc shim + migrate 19 seed scripts + CI gate + cron-adopt + refs check",
+    "Stage 6: LLM system-impact plugin (egress-controlled, local structural core) + full preview deploy + PostgresAdapter (proves the seam)"
+  ],
+  "hard_constraints_non_negotiable": [
+    "NEVER write to prod DB in any condition; reads only on prod; all mutations to local or remote DEV; ask first if a prod write seems needed",
+    "During dev work use .env Mongo URI; local is the default; don't ask which env unless prod explicitly requested in the turn",
+    "Before any heavy/risky PROD collection mod (later, with permission), back up the affected docs first",
+    "No em-dashes in any user-facing text/docs/comments",
+    "Copyable text (commands/prompts) must be bare: no code-fence/quote wrappers, no lead-in line",
+    "Don't use vision/output evals; eval tool-calls, payloads, reasoning",
+    "Do not copy git source code (license boundary); reuse only design vocabulary",
+    "Do not put a DB driver or LLM SDK in src/cfg/core/ (CI gate fails)"
+  ],
+  "environment_gotchas": {
+    "local_mongo": "localhost:27017 is DOWN on this machine; project env/ venv + pymongo gone. Prior session used mongosh against remote managed Mongo, READ-ONLY, appdb-dev.",
+    "remote_cluster": "hosts both appdb (PROD) and appdb-dev (DEV). Touch only appdb-dev for writes.",
+    "to_build_cfg": "set up fresh venv + local Mongo REPLICA SET (single-node RS is fine and REQUIRED for transactions; apply() needs a txn; standalone Mongo makes cfg refuse gated mutations by design)."
+  },
+  "hardening_history": {
+    "rounds": 4,
+    "v0.1": "20 defects (worst: is_active multi-doc, illusory CAS, uni-temporal as-of)",
+    "v0.2->v0.3": "6 write-path Tier-1 (txn co-location, put/seed_config, is_active flip verb, bypass-not-caught-by-CAS, hand-wavy valid-time, redact-vs-oid) + Tier-2s",
+    "v0.3->v0.3.1": "4 residual Tier-1 (put_config self-drift, import interval overlap, activate missing live-CAS, system-impact neighbor egress leak)",
+    "v0.3.1->v0.3.2": "1 Tier-1 from exit gate (strip_on_store missing from field-set invariant + hash strip) + 2 cosmetic; all patched; GREEN",
+    "confirmed_holding": ["HEAD-pointer CAS", "out-of-band human approval / agent-safety", "read-side runtime_filter keying", "dual-CAS", "redact-vs-oid (git linkage survives: trailers key on seq not oid)", "June-7 valid-time case"]
+  },
+  "do_not": [
+    "Start implementation before the FIRST TASK (read backend code) and confirming spec vs reality",
+    "Write to prod Mongo ever without explicit per-turn permission + backup",
+    "Redo the spec from scratch (hardened 4x); improve via small marked edits + changelog if code contradicts it"
+  ]
+}
