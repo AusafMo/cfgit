@@ -105,6 +105,11 @@ def _parser() -> argparse.ArgumentParser:
     p_import.add_argument("-m", "--message", default="initial import")
     p_import.add_argument("--allow-secret", action="store_true")
 
+    p_doctor = sub.add_parser("doctor")
+    p_doctor.add_argument("record", nargs="?")
+    p_doctor.add_argument("--large-field-bytes", type=int, default=20000,
+                          help="flag string fields at or above this size (default 20000)")
+
     p_status = sub.add_parser("status")
     p_status.add_argument("record", nargs="?")
 
@@ -205,6 +210,15 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         rows = engine.status(_parse_record(args.record) if args.record else None)
         code = EXIT_DIRTY if any(r.state == "changed_outside_cfgit" for r in rows) else EXIT_OK
         return rows, code
+
+    if args.cmd == "doctor":
+        report = engine.doctor(
+            _parse_record(args.record) if args.record else None,
+            large_field_bytes=args.large_field_bytes,
+        )
+        report["text"] = _format_doctor(report)
+        code = EXIT_OK if report["ok"] else EXIT_DIRTY
+        return report, code
 
     if args.cmd == "diff":
         changes = engine.diff(_parse_record(args.record), args.a, args.b)
@@ -357,6 +371,62 @@ def _parse_when(raw: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _format_doctor(report: dict[str, Any]) -> str:
+    lines: list[str] = []
+    n = report.get("scanned", 0)
+    if report.get("ok"):
+        lines.append(f"doctor: {n} live record(s) scanned — no blockers. Safe to import.")
+        return "\n".join(lines)
+    sb = report.get("secret_blocks", [])
+    lf = report.get("large_fields", [])
+    ki = report.get("key_issues", [])
+    lines.append(
+        f"doctor: {n} live record(s) scanned — {len(sb)} secret block(s), "
+        f"{len(lf)} large field(s), {len(ki)} key issue(s)."
+    )
+    if ki:
+        lines.append("")
+        lines.append("Key / live-rule issues (fix id_field or live_when before import):")
+        for issue in ki:
+            lines.append(f"  {issue}")
+    if sb:
+        has_value = any(g["kind"] == "value" for g in sb)
+        lines.append("")
+        lines.append("Secret-deny matches (would refuse import). Two ways to resolve each:")
+        lines.append("  - secret_fields = strip the value from history (use when the field is NOT")
+        lines.append("    needed in the record, or is schema structure).")
+        lines.append("  - import/commit --allow-secret = STORE the real value in history (use when")
+        lines.append("    the key must stay in the record so restore writes it back; value is then")
+        lines.append("    in cfgit history in plaintext).")
+        for g in sb:
+            tag = "real value" if g["kind"] == "value" else "field name"
+            lines.append(f"  {g['collection']}: {g['path']}  [{tag}: {g['pattern']}]  "
+                         f"x{g['count']} (e.g. {g['example']})")
+        if has_value:
+            lines.append("  ! at least one match is a REAL secret VALUE — if that key must live in")
+            lines.append("    the record, keep it OUT of secret_fields and import with --allow-secret.")
+    if lf:
+        lines.append("")
+        kb = report.get("large_field_bytes", 0) // 1000
+        lines.append(f"Large fields (>= {kb}KB; consider ignore_fields to keep diffs readable):")
+        for g in lf:
+            lines.append(f"  {g['collection']}: {g['path']}  up to {g['max_bytes']//1000}KB  x{g['count']}")
+    sug = report.get("suggestions", {})
+    if sug:
+        lines.append("")
+        lines.append("Paste-ready fixes (per collection in .cfg.toml):")
+        for coll in sorted(sug):
+            entry = sug[coll]
+            lines.append(f"  # [[collection]] name = \"{coll}\"")
+            if entry.get("secret_fields"):
+                joined = ", ".join(f'"{p}"' for p in sorted(set(entry["secret_fields"])))
+                lines.append(f"  secret_fields = [{joined}]")
+            if entry.get("ignore_fields"):
+                joined = ", ".join(f'"{p}"' for p in sorted(set(entry["ignore_fields"])))
+                lines.append(f"  ignore_fields = [{joined}]")
+    return "\n".join(lines)
+
+
 def _emit(value: Any, *, json_mode: bool) -> None:
     if json_mode:
         print(json.dumps(_to_json(value), indent=2, sort_keys=True))
@@ -365,7 +435,7 @@ def _emit(value: Any, *, json_mode: bool) -> None:
         for item in value:
             print(_format_item(item))
         return
-    if isinstance(value, dict) and "text" in value and "changes" in value:
+    if isinstance(value, dict) and "text" in value and ("changes" in value or "secret_blocks" in value):
         print(value["text"])
         return
     print(_format_item(value))

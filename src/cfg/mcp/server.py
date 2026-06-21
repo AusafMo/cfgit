@@ -44,6 +44,26 @@ def cfg_status(
 
 
 @mcp.tool()
+def cfg_doctor(
+    record: str | None = None,
+    large_field_bytes: int = 20000,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Read-only preflight before import/commit: reports secret-deny matches,
+    oversized fields, and key issues per collection, with paste-ready secret_fields
+    / ignore_fields snippets. Writes nothing."""
+    return _call(
+        "doctor",
+        {"record": record, "large_field_bytes": large_field_bytes},
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
 def cfg_import(
     record: str | None = None,
     all_records: bool = False,

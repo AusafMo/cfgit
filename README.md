@@ -163,9 +163,15 @@ Point it at a local or staging database first:
 ```bash
 export DEV_MONGODB_URI='mongodb://localhost:27017/?replicaSet=rs0'
 cfg init
+cfg doctor
 cfg import --all -m "initial import"
 cfg status
 ```
+
+`cfg doctor` is read-only. Run it before the first import for a new database or
+`.cfg.toml`; it reports secret-deny matches, large fields, and live-rule/key
+issues in one pass, with paste-ready `secret_fields` and `ignore_fields`
+suggestions.
 
 Check drift:
 
@@ -234,6 +240,7 @@ Common commands:
 
 ```bash
 cfg init
+cfg doctor [record]
 cfg import --all -m "initial import"
 cfg status [record]
 cfg diff <record> [from] [to]
@@ -294,6 +301,7 @@ The MCP server exposes the same operations with a uniform envelope:
 Tools include:
 
 - `cfg_status`
+- `cfg_doctor`
 - `cfg_diff`
 - `cfg_impact`
 - `cfg_commit`
