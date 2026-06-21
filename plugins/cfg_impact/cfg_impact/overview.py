@@ -73,6 +73,7 @@ async def overview_with_optional_llm(
     provider: str | None = None,
     model: str | None = None,
     use_llm: bool = False,
+    against: list[str] | None = None,
 ) -> dict[str, Any]:
     overview_data = deterministic_overview(engine, record, a=a, b=b)
     if not use_llm:
@@ -91,10 +92,12 @@ async def overview_with_optional_llm(
         return overview_data
 
     llm = ImpactProviderFactory.create_provider(provider_name, model=model)
-    # whole-system context so the model reasons cross-config (text gated by share_with_ai)
+    # cross-config context. If the caller selected records (`against`), reason against
+    # ONLY those; otherwise auto-build from the whole system. Text always gated by allowlist.
     ref = parse_record(record)
     allow = set(engine.config.connections.share_with_ai)
-    system_map = _system_map(engine, exclude=ref, allow=allow)
+    against_set = {a.strip() for a in against if a and a.strip()} if against else None
+    system_map = _system_map(engine, exclude=ref, allow=allow, against=against_set)
     shared = [c["record_id"] for c in system_map.get("configs", []) if "instructions_excerpt" in c or "contract" in c]
     _log_llm_consent(llm.provider_name, [record, *shared])
     payload = _overview_prompt_payload(overview_data)
@@ -125,6 +128,7 @@ def overview(
     provider: str | None = None,
     model: str | None = None,
     use_llm: bool = False,
+    against: list[str] | None = None,
 ) -> dict[str, Any]:
     return asyncio.run(
         overview_with_optional_llm(
@@ -135,6 +139,7 @@ def overview(
             provider=provider,
             model=model,
             use_llm=use_llm,
+            against=against,
         )
     )
 
@@ -180,17 +185,33 @@ def _config_card(doc: dict[str, Any], *, with_text: bool) -> dict[str, Any]:
     return card
 
 
-def _system_map(engine: Engine, *, exclude: RecordRef, allow: set[str]) -> dict[str, Any]:
+def _system_map(
+    engine: Engine,
+    *,
+    exclude: RecordRef,
+    allow: set[str],
+    against: set[str] | None = None,
+) -> dict[str, Any]:
     """Compact view of the OTHER live configs so the model reasons cross-system.
     A config's text (instructions/contract) is included only if that config is in
-    the share_with_ai allowlist; otherwise just id + collection are sent."""
+    the share_with_ai allowlist; otherwise just id + collection are sent.
+
+    If `against` is given, ONLY records the user explicitly selected are included
+    (matched by 'collection:record_id' or bare 'record_id'), and the non-rich tail
+    is suppressed: the user scoped the context, so we send exactly that set."""
 
     def _allowed(coll: str, rid: str) -> bool:
         return "*" in allow or rid in allow or f"{coll}:{rid}" in allow or f"{coll}:*" in allow
 
+    def _selected(coll: str, rid: str) -> bool:
+        return against is None or f"{coll}:{rid}" in against or rid in against
+
+    scoped = against is not None
     out: list[dict[str, Any]] = []
     for row in engine.status():
         if row.collection == exclude.collection and row.record_id == exclude.record_id:
+            continue
+        if not _selected(row.collection, row.record_id):
             continue
         entry: dict[str, Any] = {"collection": row.collection, "record_id": row.record_id, "state": row.state}
         with_text = _allowed(row.collection, row.record_id)
@@ -202,25 +223,27 @@ def _system_map(engine: Engine, *, exclude: RecordRef, allow: set[str]) -> dict[
             card = _config_card(doc, with_text=with_text)
         except Exception:
             pass
-        # Only send rich cards for configs that actually carry reasoning-relevant content
-        # (instructions / contract / tools / skills). Bare routing/model rows would just be
-        # noise and needless egress; include them only as a lightweight id mention, capped.
+        # When the user explicitly selected this record, always include it (that's the
+        # whole point of selecting). Otherwise (auto mode) only include rich cards that
+        # carry reasoning-relevant content, to avoid noise and needless egress.
         rich = any(k in card for k in ("instructions_excerpt", "contract", "tools", "skills"))
-        if rich:
+        if scoped or rich:
             entry.update(card)
             if not with_text:
                 entry["text_withheld"] = "not in share_with_ai"
             out.append(entry)
-        if len(out) >= _SYS_MAX_CONFIGS:
+        if not scoped and len(out) >= _SYS_MAX_CONFIGS:
             break
-    # append a compact tail of the remaining (non-rich) record ids so the model knows
-    # what else exists, without sending their bodies
-    others = [
-        f"{r.collection}:{r.record_id}"
-        for r in engine.status()
-        if not (r.collection == exclude.collection and r.record_id == exclude.record_id)
-    ]
-    return {"configs": out, "other_record_ids": others[:200]} if out or others else {"configs": [], "other_record_ids": []}
+    result: dict[str, Any] = {"configs": out, "scoped": scoped}
+    if not scoped:
+        # auto mode: append a compact tail of the remaining record ids so the model
+        # knows what else exists, without sending their bodies
+        result["other_record_ids"] = [
+            f"{r.collection}:{r.record_id}"
+            for r in engine.status()
+            if not (r.collection == exclude.collection and r.record_id == exclude.record_id)
+        ][:200]
+    return result
 
 
 def _find_affected_records(

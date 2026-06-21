@@ -350,6 +350,12 @@ UI_HTML = r"""<!doctype html>
     .doc.sel .nm .leaf{color:var(--ink)}
     .doc .rt{font-family:var(--mono);font-size:10px;color:var(--faint);flex:0 0 auto}
     .doc.sel .nm{color:var(--ink)}
+    /* multi-select "in context" marker (cmd/ctrl-click adds a record to the impact context) */
+    .doc.ctx{background:var(--sky-bg)}
+    .doc.ctx .ckx{color:var(--sky)}
+    .ckx{flex:0 0 auto;width:13px;height:13px;display:grid;place-items:center;font-size:10px;color:transparent}
+    .doc:hover .ckx{color:var(--edge2)}
+    .doc.ctx:hover .ckx{color:var(--sky)}
     .tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;
       padding:1px 6px;border-radius:5px}
     .tag.drift{color:var(--amber);background:var(--amber-bg)}
@@ -402,9 +408,14 @@ UI_HTML = r"""<!doctype html>
     .btn.go:hover{background:var(--blue2)}
     .btn.warn{color:var(--amber);border-color:var(--amber-bg)}
     .btn:disabled{opacity:.45;cursor:default}
-    .paperwrap{flex:1;min-height:0;overflow:auto;background:var(--bg);padding:16px}
+    /* padding lives on .paper as margin (not on the scroll box) so the sticky field header
+       pins flush to the visible top edge — sticky top:0 references the scroll content box. */
+    .paperwrap{flex:1;min-height:0;overflow:auto;background:var(--bg)}
+    /* no overflow:hidden here — it would clip the sticky field header. Round the top via the
+       legend; the bottom rows sit flush (the paper border still reads as rounded). */
     .paper{background:var(--paper);color:var(--paper-ink);border:1px solid var(--paper-edge);border-radius:10px;
-      box-shadow:var(--shadow);overflow:hidden;font-family:var(--mono);font-size:12.5px}
+      box-shadow:var(--shadow);font-family:var(--mono);font-size:12.5px;margin:16px}
+    .paper-h{border-radius:10px 10px 0 0}
     .paper-h{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--paper-edge)}
     .paper-h>div{padding:9px 16px;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--paper-dim);
       display:flex;align-items:center;gap:7px}
@@ -413,8 +424,17 @@ UI_HTML = r"""<!doctype html>
     .paper-h .l .swatch{background:var(--paper-del-ink)} .paper-h .r .swatch{background:var(--paper-add-ink)}
     .frow{border-bottom:1px solid var(--paper-edge)}
     .frow:last-child{border-bottom:0}
-    .fname{padding:5px 16px;font-size:11px;color:var(--paper-dim);background:var(--paper-gutter);
-      border-bottom:1px solid var(--paper-edge);letter-spacing:.02em}
+    /* the field name is the sticky header for its whole diff: it pins to the top of the
+       scroll area and stays visible the entire time you scroll that field's lines.
+       its parent .frow is tall (the full field diff), so sticky has room to travel.
+       the leading fold's expand control is fused in here, so header + "expand N
+       unchanged" are a single pinned bar (not two stacked bars that scroll apart). */
+    .fname{position:sticky;top:0;z-index:4;display:flex;align-items:center;gap:12px;min-height:30px;
+      padding:5px 16px;font-size:11px;color:var(--paper-dim);background:var(--paper-gutter);
+      border-bottom:1px solid var(--paper-edge);box-shadow:0 1px 0 rgba(0,0,0,.04)}
+    .fname .fnm{letter-spacing:.04em;text-transform:uppercase;font-weight:600;flex:0 0 auto}
+    .fname .fhx{display:flex;align-items:center;gap:6px;margin-left:auto}
+    .fname .leadfold{display:flex;align-items:center;gap:6px}
     .fpair{display:grid;grid-template-columns:1fr 1fr}
     .fside{padding:8px 16px;white-space:pre-wrap;word-break:break-word;min-height:34px;line-height:1.55}
     .fside.r{border-left:1px solid var(--paper-edge)}
@@ -422,24 +442,26 @@ UI_HTML = r"""<!doctype html>
     .fside.add{background:var(--paper-add);color:var(--paper-add-ink)}
     .fside.void{background:repeating-linear-gradient(45deg,transparent,transparent 7px,rgba(0,0,0,.025) 7px,rgba(0,0,0,.025) 14px)}
     /* line-aligned split diff for long multi-line strings (git split view) */
-    .splitcol{display:grid;grid-template-columns:1fr 1fr}
-    .scol{min-width:0}
-    .scol.r{border-left:1px solid var(--paper-edge)}
-    .dl{display:grid;grid-template-columns:34px 1fr;line-height:1.5;font-size:12px;border-bottom:1px solid rgba(0,0,0,.035)}
-    .dl .gut{text-align:right;padding:3px 8px 3px 0;color:var(--paper-dim);user-select:none;font-size:10.5px;
+    /* row-aligned split diff: each .drow has a left + right cell; folds are expandable */
+    .splitgrid{display:flex;flex-direction:column}
+    .drow{display:grid;grid-template-columns:1fr 1fr}
+    .dcell{display:grid;grid-template-columns:38px 14px 1fr;align-items:baseline;line-height:1.5;font-size:12px;
+      border-bottom:1px solid rgba(0,0,0,.04);min-width:0}
+    .dcell.r{border-left:1px solid var(--paper-edge)}
+    .dcell .gut{text-align:right;padding:3px 7px 3px 0;color:var(--paper-dim);user-select:none;font-size:10.5px;
       border-right:1px solid var(--paper-edge);background:var(--paper-gutter)}
-    .dl .ln{padding:3px 12px;white-space:pre-wrap;word-break:break-word}
-    .dl.del{background:var(--paper-del)} .dl.del .ln{color:var(--paper-del-ink)} .dl.del .gut{background:#f3d9d3;color:#b56a5c}
-    .dl.del .sign{color:var(--paper-del-ink)}
-    .dl.add{background:var(--paper-add)} .dl.add .ln{color:var(--paper-add-ink)} .dl.add .gut{background:#d9ead2;color:#5f8a64}
-    .dl.add .sign{color:var(--paper-add-ink)}
-    .dl.ctx .ln{color:var(--paper-dim)}
-    .dl.blank{background:repeating-linear-gradient(45deg,transparent,transparent 7px,rgba(0,0,0,.022) 7px,rgba(0,0,0,.022) 14px)}
-    .dl.blank .gut{background:transparent;border-right-color:transparent}
-    .dl .sign{display:inline-block;width:10px;color:var(--paper-dim)}
-    .fold{padding:4px 16px;text-align:center;color:var(--paper-dim);font-size:11px;background:var(--paper-gutter);
-      border-bottom:1px solid var(--paper-edge);cursor:pointer}
-    .fold:hover{color:var(--paper-ink)}
+    .dcell .sign{text-align:center;user-select:none;color:var(--paper-dim)}
+    .dcell .tx{padding:3px 10px;white-space:pre-wrap;word-break:break-word}
+    .dcell.ctx .tx{color:var(--paper-dim)}
+    .dcell.del{background:var(--paper-del)} .dcell.del .tx,.dcell.del .sign{color:var(--paper-del-ink)} .dcell.del .gut{background:#f3d9d3;color:#b56a5c}
+    .dcell.add{background:var(--paper-add)} .dcell.add .tx,.dcell.add .sign{color:var(--paper-add-ink)} .dcell.add .gut{background:#d9ead2;color:#5f8a64}
+    .dcell.void{background:repeating-linear-gradient(45deg,transparent,transparent 7px,rgba(0,0,0,.022) 7px,rgba(0,0,0,.022) 14px)}
+    .foldrow{grid-template-columns:1fr}
+    .foldbar{display:flex;align-items:center;justify-content:center;gap:6px;padding:4px 16px;
+      background:var(--paper-gutter);border-top:1px solid var(--paper-edge);border-bottom:1px solid var(--paper-edge)}
+    .fx{font-family:var(--mono);font-size:10.5px;color:var(--paper-dim);background:var(--paper);
+      border:1px solid var(--paper-edge);border-radius:6px;padding:2px 10px;cursor:pointer;line-height:1.5}
+    .fx:hover{color:var(--paper-ink);border-color:var(--paper-dim);background:#fff}
     .nodiff{padding:34px 16px;color:var(--paper-dim);text-align:center;font-family:var(--body);font-size:13px}
     /* impact / system-overview panel (dark, sits above the paper diff) */
     .impact{margin:0 0 16px;background:var(--panel);border:1px solid var(--edge2);border-radius:12px;overflow:hidden}
@@ -464,6 +486,10 @@ UI_HTML = r"""<!doctype html>
       color:var(--faint);margin-bottom:3px}
     .impact .llm .llmul{margin:3px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
     .impact .llm .llmul li{font-size:12px;line-height:1.45;color:var(--dim)}
+    /* inline markdown the LLM emits: bold/italic inherit; code gets a subtle chip */
+    .impact .llm strong{color:var(--ink);font-weight:600}
+    .impact .llm code{font-family:var(--mono);font-size:.92em;background:var(--chip,rgba(127,127,127,.14));
+      padding:1px 5px;border-radius:4px}
     .impact .off{font-size:12px;color:var(--faint)}
     .doconly .paper-h{grid-template-columns:1fr}
     .docbody{padding:14px 16px;white-space:pre-wrap;word-break:break-word;line-height:1.6;max-height:none}
@@ -530,9 +556,16 @@ UI_HTML = r"""<!doctype html>
   <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
 
 <script>
-const S={records:[],filter:"all",q:"",sel:null,hist:[],who:null,open:{}};
+const S={records:[],filter:"all",q:"",sel:null,against:new Set(),hist:[],who:null,open:{}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// inline markdown for LLM narration: escape first (XSS-safe), then render the small
+// subset the model actually emits — **bold**, *italic*, `code`. **bold** before
+// *italic* so the bold markers aren't consumed by the italic rule.
+const mdi=v=>esc(v)
+  .replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
+  .replace(/(^|[^*])\*([^*\n]+)\*/g,"$1<em>$2</em>")
+  .replace(/`([^`]+)`/g,'<code>$1</code>');
 const fmt=v=>typeof v==="object"?JSON.stringify(v):String(v);
 const dcls=s=>s==="clean"?"clean":s==="new"?"new":"drift";
 const isDrift=s=>s!=="clean"&&s!=="new";
@@ -601,19 +634,41 @@ function renderTree(){
       </div>
       <div class="docs">${recs.map(r=>{
         const key=r.collection+":"+r.record_id;const sel=S.sel===key?"sel":"";
+        const ctx=S.against.has(key)?"ctx":"";
         const right=r.state==="clean"?`<span class="rt">@${r.head_seq??""}</span>`
           :r.state==="new"?`<span class="tag new">new</span>`:`<span class="tag drift">drift</span>`;
         const slash=r.record_id.lastIndexOf("/");
         const nmHtml=slash>=0
           ? `<span class="pre">${esc(r.record_id.slice(0,slash+1))}</span><span class="leaf">${esc(r.record_id.slice(slash+1))}</span>`
           : `<span class="leaf">${esc(r.record_id)}</span>`;
-        return `<div class="doc ${sel}" data-k="${esc(key)}" title="${esc(r.record_id)}">
+        return `<div class="doc ${sel} ${ctx}" data-k="${esc(key)}" title="${esc(r.record_id)}">
+          <span class="ckx">${S.against.has(key)?"✓":"+"}</span>
           <span class="st ${dcls(r.state)}"></span>
           <span class="nm">${nmHtml}</span>${right}</div>`;}).join("")}</div></div>`;
   }
   el.innerHTML=html;
   el.querySelectorAll(".coll-h").forEach(h=>h.onclick=()=>{const c=h.parentElement.dataset.c;S.open[c]=!S.open[c];renderTree();});
-  el.querySelectorAll(".doc").forEach(d=>d.onclick=e=>{e.stopPropagation();selectRecord(d.dataset.k);});
+  el.querySelectorAll(".doc").forEach(d=>d.onclick=e=>{
+    e.stopPropagation();
+    // the ✓/+ marker, or cmd/ctrl-click, toggles the record into the impact context.
+    // a plain click selects it as the primary (drives diff/history).
+    const onMarker=e.target.classList&&e.target.classList.contains("ckx");
+    if(onMarker||e.metaKey||e.ctrlKey){toggleContext(d.dataset.k);}
+    else{selectRecord(d.dataset.k);}
+  });
+}
+function toggleContext(key){
+  if(S.against.has(key))S.against.delete(key); else S.against.add(key);
+  // the primary record is implicitly its own diff subject; don't also keep it in `against`
+  S.against.delete(S.sel);
+  renderTree();
+  refreshImpactBtn();
+}
+function refreshImpactBtn(){
+  const b=$("aImpact"); if(!b)return;
+  const n=[...S.against].filter(k=>k!==S.sel).length;
+  b.textContent=n?`Impact (${n})`:"Impact";
+  b.title=n?`Reason this change against ${n} selected record(s)`:"Reason this change against the whole system";
 }
 
 async function selectRecord(key){
@@ -664,12 +719,17 @@ async function showDrift(rec){
   $("aImpact").onclick=()=>showImpact();
   $("aAdopt").onclick=()=>openAdopt(rec);
   $("aRestore").onclick=()=>openRestore(rec,"@"+(rec.head_seq??""));
+  refreshImpactBtn();
 }
 async function showImpact(){
   if(!S.diffCtx)return;
+  const against=[...S.against].filter(k=>k!==S.sel);
   const btn=$("aImpact"); if(btn){btn.disabled=true;btn.textContent="Analyzing…";}
-  const r=await api("impact",{record:S.sel,a:S.diffCtx.a,b:S.diffCtx.b,use_llm:true});
-  if(btn){btn.disabled=false;btn.textContent="Impact";}
+  const payload={record:S.sel,a:S.diffCtx.a,b:S.diffCtx.b,use_llm:true};
+  if(against.length)payload.against=against;
+  const r=await api("impact",payload);
+  if(btn){btn.disabled=false;}
+  refreshImpactBtn();
   const d=r&&r.data?r.data:{};
   const risk=(d.risk_level||"medium").toLowerCase();
   const cats=(d.categories||[]).map(c=>`<span class="cat">${esc(c)}</span>`).join(" ")||`<span class="off">none</span>`;
@@ -681,8 +741,8 @@ async function showImpact(){
   if(llm.enabled){
     const ov=llm.overview||{};
     const parts=[];
-    const asList=v=>Array.isArray(v)?`<ul class="llmul">${v.map(x=>`<li>${esc(typeof x==="object"?JSON.stringify(x):x)}</li>`).join("")}</ul>`:esc(v);
-    if(ov.summary)parts.push(`<div class="body">${esc(ov.summary)}</div>`);
+    const asList=v=>Array.isArray(v)?`<ul class="llmul">${v.map(x=>`<li>${typeof x==="object"?esc(JSON.stringify(x)):mdi(x)}</li>`).join("")}</ul>`:mdi(v);
+    if(ov.summary)parts.push(`<div class="body">${mdi(ov.summary)}</div>`);
     if(ov.behavior_change)parts.push(`<div class="lk"><span class="lkk">behavior</span>${asList(ov.behavior_change)}</div>`);
     if(ov.blast_radius)parts.push(`<div class="lk"><span class="lkk">blast radius</span>${asList(ov.blast_radius)}</div>`);
     if(ov.unknowns&&(Array.isArray(ov.unknowns)?ov.unknowns.length:true))parts.push(`<div class="lk"><span class="lkk">unknowns</span>${asList(ov.unknowns)}</div>`);
@@ -691,10 +751,15 @@ async function showImpact(){
   } else {
     llmHtml=`<div class="llm"><div class="who">LLM narration</div><div class="off">off — enable <span class="mono">[connections]</span> in .cfg.toml for a written explanation of what this change does to the system. Everything above is computed locally, no data leaves your machine.</div></div>`;
   }
+  const scopedAgainst=[...S.against].filter(k=>k!==S.sel);
+  const scopeRow=scopedAgainst.length
+    ? `<div class="row"><span class="k">reasoned vs</span>${scopedAgainst.map(k=>`<span class="cat">${esc(k.split(":").pop())}</span>`).join(" ")}</div>`
+    : `<div class="row"><span class="k">reasoned vs</span><span class="off">whole system (select records on the left to scope)</span></div>`;
   const panel=`<div class="impact">
     <div class="ih"><span class="tt">System impact</span><span class="sp"></span><span class="risk ${risk}">${esc(risk)} risk</span></div>
     <div class="ib">
       <div class="sum">${esc(d.summary||"")}</div>
+      ${scopeRow}
       <div class="row"><span class="k">changed</span>${(d.changed_paths||[]).map(p=>`<span class="cat">${esc(p)}</span>`).join(" ")||`<span class="off">—</span>`}</div>
       <div class="row"><span class="k">categories</span>${cats}</div>
       <div class="row"><span class="k">affects</span>${affHtml}</div>
@@ -724,6 +789,7 @@ async function selectNode(e){
   else{S.diffCtx=null;const res=await api("show",{record:S.sel,ref:"@"+e.seq});renderDoc(res);}
   const ib=$("aImpact");if(ib)ib.onclick=()=>showImpact();
   const rb=$("aRestore");if(rb)rb.onclick=()=>openRestore(S.records.find(r=>r.collection+":"+r.record_id===S.sel),"@"+e.seq);
+  refreshImpactBtn();
 }
 
 function changesFrom(res){if(!res||!res.data)return null;const d=res.data;
@@ -746,36 +812,85 @@ function lineDiff(aStr,bStr){
   while(j<m){ops.push({t:"add",l:null,r:b[j]});j++;}
   return ops;
 }
-// collapse long runs of unchanged context to "… N unchanged lines …"
-function foldContext(ops,pad){
-  pad=pad==null?3:pad; const out=[]; let i=0;
-  const changedAt=ops.map(o=>o.t!=="ctx");
-  const keep=new Array(ops.length).fill(false);
-  for(let k=0;k<ops.length;k++) if(changedAt[k]) for(let d=-pad;d<=pad;d++){const idx=k+d;if(idx>=0&&idx<ops.length)keep[idx]=true;}
+// number each op with its left/right line number, then collapse long unchanged runs
+// into a fold that REMEMBERS its hidden ops so the user can expand them (git-style).
+const FOLD_PAD=3, FOLD_STEP=10;   // context kept around changes; lines revealed per expand click
+function numberOps(ops){
+  let ln=0,rn=0;
+  for(const o of ops){
+    if(o.t==="ctx"){o.ln=++ln;o.rn=++rn;}
+    else if(o.t==="del"){o.ln=++ln;o.rn=null;}
+    else{o.ln=null;o.rn=++rn;}
+  }
+  return ops;
+}
+function foldContext(ops){
+  const out=[];const keep=new Array(ops.length).fill(false);
+  for(let k=0;k<ops.length;k++) if(ops[k].t!=="ctx") for(let d=-FOLD_PAD;d<=FOLD_PAD;d++){const idx=k+d;if(idx>=0&&idx<ops.length)keep[idx]=true;}
+  let i=0;
   while(i<ops.length){
     if(keep[i]){out.push(ops[i]);i++;}
-    else{let j=i;while(j<ops.length&&!keep[j])j++;out.push({t:"fold",n:j-i});i=j;}
+    else{let j=i;while(j<ops.length&&!keep[j])j++;out.push({t:"fold",hidden:ops.slice(i,j)});i=j;}
   }
   return out;
 }
-function splitDiffHtml(before,after){
-  const ops=foldContext(lineDiff(before,after));
-  let L="",R="";let ln=0,rn=0;
-  for(const o of ops){
-    if(o.t==="fold"){const f=`<div class="dl blank"><div class="gut"></div><div class="ln" style="text-align:center;color:var(--paper-dim)">⋯ ${o.n} unchanged ⋯</div></div>`;
-      L+=f;R+=f;ln+=o.n;rn+=o.n;continue;}
-    if(o.t==="ctx"){ln++;rn++;
-      L+=`<div class="dl ctx"><div class="gut">${ln}</div><div class="ln"><span class="sign"> </span>${esc(o.l)}</div></div>`;
-      R+=`<div class="dl ctx"><div class="gut">${rn}</div><div class="ln"><span class="sign"> </span>${esc(o.r)}</div></div>`;}
-    else if(o.t==="del"){ln++;
-      L+=`<div class="dl del"><div class="gut">${ln}</div><div class="ln"><span class="sign">−</span>${esc(o.l)}</div></div>`;
-      R+=`<div class="dl blank"><div class="gut"></div><div class="ln"></div></div>`;}
-    else{rn++;
-      L+=`<div class="dl blank"><div class="gut"></div><div class="ln"></div></div>`;
-      R+=`<div class="dl add"><div class="gut">${rn}</div><div class="ln"><span class="sign">+</span>${esc(o.r)}</div></div>`;}
-  }
-  return `<div class="splitcol"><div class="scol">${L}</div><div class="scol r">${R}</div></div>`;
+function lineRowHtml(o){
+  if(o.t==="ctx")return `<div class="drow"><div class="dcell l ctx"><span class="gut">${o.ln}</span><span class="sign"> </span><span class="tx">${esc(o.l)}</span></div><div class="dcell r ctx"><span class="gut">${o.rn}</span><span class="sign"> </span><span class="tx">${esc(o.r)}</span></div></div>`;
+  if(o.t==="del")return `<div class="drow"><div class="dcell l del"><span class="gut">${o.ln}</span><span class="sign">−</span><span class="tx">${esc(o.l)}</span></div><div class="dcell r void"></div></div>`;
+  return `<div class="drow"><div class="dcell l void"></div><div class="dcell r add"><span class="gut">${o.rn}</span><span class="sign">+</span><span class="tx">${esc(o.r)}</span></div></div>`;
 }
+let _foldSeq=0;
+const _folds={};   // id -> hidden ops, for expand-in-place
+// the expand controls for one fold; `bare` returns just the buttons (for the
+// merged sticky header), otherwise they're wrapped in their own scrolling row.
+function foldControls(hidden){
+  const id="fold"+(++_foldSeq);_folds[id]=hidden;const n=hidden.length;
+  const up=`<button class="fx" data-fold="${id}" data-dir="up" title="expand above">↑</button>`;
+  const dn=`<button class="fx" data-fold="${id}" data-dir="down" title="expand below">↓</button>`;
+  const all=`<button class="fx" data-fold="${id}" data-dir="all">expand ${n} unchanged</button>`;
+  return {id, html:`${n>FOLD_STEP*2?up:""}${all}${n>FOLD_STEP*2?dn:""}`};
+}
+function foldRowHtml(hidden){
+  const c=foldControls(hidden);
+  return `<div class="drow foldrow" data-foldid="${c.id}"><div class="foldbar">${c.html}</div></div>`;
+}
+// Returns {lead, body}. If the diff opens on unchanged lines, `lead` holds that
+// first fold's expand controls so the caller can fuse them into the sticky field
+// header (one bar, and the control stays pinned). `body` is the row grid.
+function splitDiffHtml(before,after){
+  const ops=foldContext(numberOps(lineDiff(before,after)));
+  let lead="";let start=0;
+  if(ops.length&&ops[0].t==="fold"){const c=foldControls(ops[0].hidden);lead=`<span class="leadfold" data-foldid="${c.id}">${c.html}</span>`;start=1;}
+  const rows=ops.slice(start).map(o=>o.t==="fold"?foldRowHtml(o.hidden):lineRowHtml(o)).join("");
+  return {lead, body:`<div class="splitgrid">${rows}</div>`};
+}
+// expand a fold: replace it (or reveal a chunk and keep a smaller fold)
+function expandFold(id,dir){
+  const hidden=_folds[id];if(!hidden)return;
+  let reveal,rest;
+  if(dir==="all"||hidden.length<=FOLD_STEP){reveal=hidden;rest=null;}
+  else if(dir==="up"){reveal=hidden.slice(0,FOLD_STEP);rest=hidden.slice(FOLD_STEP);}
+  else{reveal=hidden.slice(hidden.length-FOLD_STEP);rest=hidden.slice(0,hidden.length-FOLD_STEP);}
+  // leading fold lives in the sticky header: reveal lines at the TOP of the body,
+  // and keep any remainder as a fresh leading control in the header (still pinned).
+  const lead=document.querySelector(`.leadfold[data-foldid="${id}"]`);
+  if(lead){
+    const grid=lead.closest(".frow").querySelector(".splitgrid");
+    if(grid)grid.insertAdjacentHTML("afterbegin",reveal.map(lineRowHtml).join(""));
+    if(rest&&rest.length){const c=foldControls(rest);lead.dataset.foldid=c.id;lead.innerHTML=c.html;}
+    else{const wrap=lead.closest(".fhx");if(wrap)wrap.remove();else lead.remove();}
+    bindFolds();return;
+  }
+  const row=document.querySelector(`.foldrow[data-foldid="${id}"]`);
+  if(!row)return;
+  let html=reveal.map(lineRowHtml).join("");
+  // a fold expanded from one side keeps the remaining hidden lines as a new fold on the other side
+  if(rest&&rest.length){const restHtml=foldRowHtml(rest);
+    html=dir==="up"?html+restHtml:restHtml+html;}
+  row.outerHTML=html;
+  bindFolds();
+}
+function bindFolds(){document.querySelectorAll(".fx").forEach(b=>b.onclick=e=>{e.stopPropagation();expandFold(b.dataset.fold,b.dataset.dir);});}
 function isLongText(v){return typeof v==="string"&&(v.length>120||v.indexOf("\n")>=0);}
 function renderDiff(res,leftLabel,rightLabel,emptyMsg){
   const ch=changesFrom(res);
@@ -786,9 +901,13 @@ function renderDiff(res,leftLabel,rightLabel,emptyMsg){
   for(const c of ch){const f=c.path||c.field||c.key||"";
     let before=("before"in c)?c.before:c.old, after=("after"in c)?c.after:c.new;
     const op=c.op||((before==null)?"add":(after==null)?"remove":"change");
-    // long multi-line text on both sides -> git-style line-aligned split
+    // long multi-line text on both sides -> git-style line-aligned split.
+    // the leading fold's expand control rides inside the sticky field-name bar,
+    // so the header and the "expand N unchanged" control are one pinned bar.
     if(op==="change"&&(isLongText(before)||isLongText(after))){
-      rows+=`<div class="frow"><div class="fname">${esc(f)}</div>${splitDiffHtml(before,after)}</div>`;
+      const sp=splitDiffHtml(before,after);
+      const lead=sp.lead?`<span class="fhx">${sp.lead}</span>`:"";
+      rows+=`<div class="frow"><div class="fname"><span class="fnm">${esc(f)}</span>${lead}</div>${sp.body}</div>`;
       continue;
     }
     const lcls=op==="add"?"void":"del", rcls=op==="remove"?"void":"add";
@@ -798,6 +917,7 @@ function renderDiff(res,leftLabel,rightLabel,emptyMsg){
   $("diff").innerHTML=`<div class="paper">
     <div class="paper-h"><div class="l"><span class="swatch"></span>${esc(leftLabel)}</div><div class="r"><span class="swatch"></span>${esc(rightLabel)}</div></div>
     ${rows}</div>`;
+  bindFolds();
 }
 function renderDoc(res){const d=res&&res.data?res.data:res;const doc=d&&d.doc?d.doc:(d&&d.text?d.text:d);
   const txt=(typeof doc==="string")?doc:JSON.stringify(doc,null,2);

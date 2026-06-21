@@ -39,8 +39,12 @@ from = "git"                            # who gets recorded as author (your git 
 [connections]                           # ONLY needed for `cfg impact`: how one config depends on another
 enabled       = false                   # the structural part still works locally even when off
 share_with_ai = []                      # names of configs whose text may be sent to the AI for the "why" explanation
-ai_provider   = "claude"                # claude | openai | local
+ai_provider   = "claude"                # claude | openai | gemini
 warn_level    = "none"                  # none | breaking (when a pre-save check should flag a change)
+# API keys are read from the ENVIRONMENT only, never from this file:
+#   claude -> ANTHROPIC_API_KEY    openai -> OPENAI_API_KEY    gemini -> GEMINI_API_KEY (or GOOGLE_API_KEY)
+#   optional model override: CFGIT_CLAUDE_MODEL / CFGIT_OPENAI_MODEL / CFGIT_GEMINI_MODEL
+# Keep secrets out of config; load them from your shell or a .env you do not commit.
 # "links" tells cfg which fields connect configs, so it can show what a change ripples into:
 links = [
   { field = "phase_contract",   means = "a contract other configs rely on" },

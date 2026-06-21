@@ -53,9 +53,13 @@ def test_impact_provider_factory_is_plugin_local() -> None:
 
     claude = ImpactProviderFactory.create_provider("claude", api_key="test-key")
     openai = ImpactProviderFactory.create_provider("openai", api_key="test-key")
+    gemini = ImpactProviderFactory.create_provider("gemini", api_key="test-key")
+    google = ImpactProviderFactory.create_provider("google", api_key="test-key")
 
     assert claude.provider_name == "claude"
     assert openai.provider_name == "openai"
+    assert gemini.provider_name == "gemini"
+    assert google.provider_name == "gemini"
 
 
 def test_llm_impact_requires_share_with_ai_allowlist() -> None:
@@ -167,6 +171,47 @@ def test_system_map_gates_contract_and_instruction_text() -> None:
 
     assert allowed["configs"][0]["contract"] == "handoff must include exact citation ids"
     assert allowed["configs"][0]["instructions_excerpt"] == "very private operating instruction"
+
+
+def test_system_map_scopes_to_explicit_against_records_only() -> None:
+    sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
+    try:
+        from cfg_impact.overview import _system_map
+    finally:
+        sys.path.pop(0)
+
+    engine = _impact_engine(
+        share_with_ai=("demo:gamma",),
+        extra_records={
+            ("demo", "beta"): {"id": "beta", "tools": ["planner"]},
+            ("demo", "gamma"): {
+                "id": "gamma",
+                "phase_contract": "gamma consumes planner output",
+                "instructions": "compare the new plan to the original user ask",
+            },
+        },
+    )
+
+    scoped = _system_map(
+        engine,
+        exclude=RecordRef("demo", "alpha"),
+        allow={"demo:gamma"},
+        against={"demo:gamma"},
+    )
+
+    assert scoped["scoped"] is True
+    assert "other_record_ids" not in scoped
+    assert [item["record_id"] for item in scoped["configs"]] == ["gamma"]
+    assert scoped["configs"][0]["contract"] == "gamma consumes planner output"
+    assert scoped["configs"][0]["instructions_excerpt"] == "compare the new plan to the original user ask"
+
+
+def test_against_payload_parser_accepts_strings_and_lists() -> None:
+    from cfg.interfaces.actions import _as_record_list
+
+    assert _as_record_list("demo:beta,demo:gamma\nmodel:a") == ["demo:beta", "demo:gamma", "model:a"]
+    assert _as_record_list(["demo:beta,demo:gamma", "model:a"]) == ["demo:beta", "demo:gamma", "model:a"]
+    assert _as_record_list("") is None
 
 
 def _impact_engine(

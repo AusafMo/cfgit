@@ -85,6 +85,9 @@ Tool list:
 - `cfg_fsck`
 - `cfg_identity_hash`
 
+`cfg_impact` accepts `against` as either a list of `collection:id` strings or a
+comma/space-separated string when narration should be scoped to selected records.
+
 ## Portable skill
 
 The skill file is:
@@ -117,6 +120,12 @@ LLM narration:
 cfg impact agent_configs:agent_planner --llm --json
 ```
 
+Scoped narration:
+
+```bash
+cfg impact agent_configs:agent_planner --against agent_configs:critic --llm --json
+```
+
 Provider config:
 
 ```toml
@@ -128,6 +137,7 @@ Supported providers:
 
 - `claude`, using `ANTHROPIC_API_KEY`
 - `openai`, using `OPENAI_API_KEY`
+- `gemini`, using `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 
 The impact engine calls a provider-agnostic `narrate()` or `complete()` method.
 Provider selection is done by `cfg_impact.providers.factory.ImpactProviderFactory`.

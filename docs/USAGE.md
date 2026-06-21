@@ -180,8 +180,19 @@ Optional LLM narration:
 cfg impact agent_configs:agent_planner --llm --json
 ```
 
+Scope LLM narration to selected related records instead of the whole system:
+
+```bash
+cfg impact agent_configs:agent_planner \
+  --against agent_configs:critic \
+  --against modelgarden_models:openai/gpt-4o-mini \
+  --llm --json
+```
+
 The LLM provider layer lives in `plugins/cfg_impact`. `--llm` is blocked unless
-the record is allowlisted in `[connections].share_with_ai`.
+the record is allowlisted in `[connections].share_with_ai`. Providers are selected
+with `[connections].ai_provider` or `--provider`; the plugin supports `claude`,
+`openai`, and `gemini`.
 
 ## UI
 

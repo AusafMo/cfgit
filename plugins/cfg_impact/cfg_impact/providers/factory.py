@@ -6,6 +6,7 @@ from typing import Any
 
 from cfg_impact.providers.base import BaseImpactProvider
 from cfg_impact.providers.claude import ClaudeProvider
+from cfg_impact.providers.gemini import GeminiProvider
 from cfg_impact.providers.openai_provider import OpenAIProvider
 
 
@@ -13,6 +14,8 @@ class ImpactProviderFactory:
     _providers = {
         "claude": ClaudeProvider,
         "openai": OpenAIProvider,
+        "gemini": GeminiProvider,
+        "google": GeminiProvider,
     }
 
     @classmethod
