@@ -59,6 +59,9 @@ database = "mongo"
 uri = "env:DEV_MONGODB_URI"
 db = "appdb-dev"
 needs_approval = false
+[env.dev.identity]
+mode = "open"                         # open | authenticated | enforced
+fingerprint_chars = 5                 # display-only suffix, never an auth secret
 [env.dev.permissions]
 mode = "open"                         # open | restricted
 admins = []                           # authors with every mutation permission
@@ -70,6 +73,17 @@ database = "mongo"
 uri = "env:PROD_MONGODB_URI"
 db = "appdb"
 needs_approval = true
+[env.prod.identity]
+mode = "authenticated"                # verifies who used cfgit; DB write lockdown makes this enforced
+sources = ["token", "db_principal"]   # token = CFGIT_IDENTITY_TOKEN hash; db_principal = DB-authenticated user
+token_env = "CFGIT_IDENTITY_TOKEN"
+fingerprint_chars = 5
+principal_map = { "alice_db" = "alice@example.com" }
+tokens = [
+  # Generate with: cfg identity-hash --stdin
+  # Humans keep the raw memorable string private, e.g. CFGIT_IDENTITY_TOKEN='imkanyewest'.
+  { author = "alice@example.com", name = "alice-main", sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
+]
 [env.prod.permissions]
 mode = "restricted"
 admins = ["owner@*", "admin@*"]

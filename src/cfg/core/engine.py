@@ -13,6 +13,7 @@ from cfg.core.authz import authorize_mutation
 from cfg.core.config import CollectionConfig, ProjectConfig
 from cfg.core.diff import diff_values
 from cfg.core.hashing import hash_doc, stored_doc, strip_for_hash
+from cfg.core.identity import Identity, self_asserted_identity
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,21 @@ class SecretBlocked(ValueError):
 
 
 class Engine:
-    def __init__(self, config: ProjectConfig, adapter: StorageAdapter, *, env: str, author: str):
+    def __init__(
+        self,
+        config: ProjectConfig,
+        adapter: StorageAdapter,
+        *,
+        env: str,
+        author: str | None = None,
+        identity: Identity | None = None,
+    ):
         self.config = config
         self.adapter = adapter
         self.env = env
-        self.author = author
+        env_cfg = config.envs[env]
+        self.identity = identity or self_asserted_identity(author or "", cfg=env_cfg.identity)
+        self.author = self.identity.author
 
     def init(self) -> dict[str, Any]:
         self._authorize("init")
@@ -500,7 +511,7 @@ class Engine:
             "op": op,
             "git_shas": [],
             "tags": [],
-            "meta": meta or {},
+            "meta": self._history_meta(meta),
         }
 
     def _all_refs(self, *, include_history: bool) -> list[RecordRef]:
@@ -514,7 +525,7 @@ class Engine:
         return [RecordRef(collection, record_id) for collection, record_id in refs]
 
     def _authorize(self, action: str) -> None:
-        authorize_mutation(self.config.envs[self.env], author=self.author, action=action)
+        authorize_mutation(self.config.envs[self.env], identity=self.identity, action=action)
 
     def _ensure_atomic(self, action: str) -> None:
         report = self.adapter.check_atomicity_scope()
@@ -547,10 +558,16 @@ class Engine:
         return {
             "allow_secret": bool(allow_secret),
             "allow_secret_author": self.author if allow_secret else None,
+            "allow_secret_identity": self.identity.history_meta() if allow_secret else None,
             "allow_secret_reason": _require_message(message) if allow_secret else None,
             "secret_matches": matches,
             "secret_policy": self.config.secrets.on_match,
         }
+
+    def _history_meta(self, meta: dict[str, Any] | None = None) -> dict[str, Any]:
+        out = {"identity": self.identity.history_meta()}
+        out.update(meta or {})
+        return out
 
 
 def _require_message(message: str) -> str:

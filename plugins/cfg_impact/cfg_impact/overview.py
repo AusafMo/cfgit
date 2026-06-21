@@ -91,12 +91,19 @@ async def overview_with_optional_llm(
         return overview_data
 
     llm = ImpactProviderFactory.create_provider(provider_name, model=model)
-    _log_llm_consent(llm.provider_name, [record])
+    # whole-system context so the model reasons cross-config (text gated by share_with_ai)
+    ref = parse_record(record)
+    allow = set(engine.config.connections.share_with_ai)
+    system_map = _system_map(engine, exclude=ref, allow=allow)
+    shared = [c["record_id"] for c in system_map.get("configs", []) if "instructions_excerpt" in c or "contract" in c]
+    _log_llm_consent(llm.provider_name, [record, *shared])
+    payload = _overview_prompt_payload(overview_data)
+    payload["system"] = system_map
     result = await llm.narrate(
-        _overview_prompt_payload(overview_data),
+        payload,
         json_dumps=lambda payload: json.dumps(payload, indent=2, sort_keys=True),
         temperature=0.1,
-        max_tokens=900,
+        max_tokens=1100,
     )
     parsed = _parse_jsonish(result.get("content", ""))
     overview_data["llm"] = {
@@ -132,6 +139,90 @@ def overview(
     )
 
 
+_ROLE_FIELDS = ("agent_type", "role", "phase", "category", "description", "display_name")
+_CONTRACT_FIELDS = ("phase_contract", "contract", "output_schema", "custom_input_schema")
+_SYS_TEXT_CAP = 600    # per-field text excerpt sent in the system map
+_SYS_MAX_CONFIGS = 40  # cap how many sibling configs we send
+
+
+def _excerpt(value: Any, cap: int) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = " ".join(value.split())
+    return s[:cap] + ("…" if len(s) > cap else "")
+
+
+def _config_card(doc: dict[str, Any], *, with_text: bool) -> dict[str, Any]:
+    card: dict[str, Any] = {}
+    for f in _ROLE_FIELDS:
+        if doc.get(f):
+            card[f] = doc[f]
+            break
+    tools = doc.get("tools")
+    if isinstance(tools, list) and tools:
+        card["tools"] = tools[:12]
+    skills = doc.get("skills")
+    if isinstance(skills, list) and skills:
+        card["skills"] = skills[:12]
+    if with_text:
+        for f in _CONTRACT_FIELDS:
+            ex = _excerpt(doc.get(f), _SYS_TEXT_CAP)
+            if ex:
+                card["contract"] = ex
+                break
+    if doc.get("model"):
+        card["model"] = doc["model"]
+    if with_text:
+        instr = doc.get("instructions") or doc.get("prompt")
+        ex = _excerpt(instr, _SYS_TEXT_CAP)
+        if ex:
+            card["instructions_excerpt"] = ex
+    return card
+
+
+def _system_map(engine: Engine, *, exclude: RecordRef, allow: set[str]) -> dict[str, Any]:
+    """Compact view of the OTHER live configs so the model reasons cross-system.
+    A config's text (instructions/contract) is included only if that config is in
+    the share_with_ai allowlist; otherwise just id + collection are sent."""
+
+    def _allowed(coll: str, rid: str) -> bool:
+        return "*" in allow or rid in allow or f"{coll}:{rid}" in allow or f"{coll}:*" in allow
+
+    out: list[dict[str, Any]] = []
+    for row in engine.status():
+        if row.collection == exclude.collection and row.record_id == exclude.record_id:
+            continue
+        entry: dict[str, Any] = {"collection": row.collection, "record_id": row.record_id, "state": row.state}
+        with_text = _allowed(row.collection, row.record_id)
+        card: dict[str, Any] = {}
+        try:
+            doc = engine.resolve_ref(RecordRef(row.collection, row.record_id), "=live")["doc"]
+            coll = engine.config.collection(row.collection)
+            doc = strip_for_hash(doc, coll)  # drop ignored/secret fields before egress
+            card = _config_card(doc, with_text=with_text)
+        except Exception:
+            pass
+        # Only send rich cards for configs that actually carry reasoning-relevant content
+        # (instructions / contract / tools / skills). Bare routing/model rows would just be
+        # noise and needless egress; include them only as a lightweight id mention, capped.
+        rich = any(k in card for k in ("instructions_excerpt", "contract", "tools", "skills"))
+        if rich:
+            entry.update(card)
+            if not with_text:
+                entry["text_withheld"] = "not in share_with_ai"
+            out.append(entry)
+        if len(out) >= _SYS_MAX_CONFIGS:
+            break
+    # append a compact tail of the remaining (non-rich) record ids so the model knows
+    # what else exists, without sending their bodies
+    others = [
+        f"{r.collection}:{r.record_id}"
+        for r in engine.status()
+        if not (r.collection == exclude.collection and r.record_id == exclude.record_id)
+    ]
+    return {"configs": out, "other_record_ids": others[:200]} if out or others else {"configs": [], "other_record_ids": []}
+
+
 def _find_affected_records(
     engine: Engine,
     *,
@@ -164,7 +255,7 @@ def _find_affected_records(
 def _changed_string_values(changes: list[dict[str, Any]]) -> list[str]:
     values: list[str] = []
     for change in changes:
-        for key in ("old", "new"):
+        for key in ("before", "after", "old", "new"):
             value = change.get(key)
             if isinstance(value, str) and 3 <= len(value) <= 120:
                 values.append(value)
@@ -246,8 +337,29 @@ def _unknowns(left: dict[str, Any], right: dict[str, Any], affected: list[dict[s
     return unknowns
 
 
+_DIFF_FIELD_CAP = 6000  # per-side char cap so the prompt stays bounded
+
+
+def _truncate(value: Any, cap: int = _DIFF_FIELD_CAP) -> Any:
+    if isinstance(value, str) and len(value) > cap:
+        return value[:cap] + f"\n…[truncated {len(value) - cap} chars]"
+    return value
+
+
 def _overview_prompt_payload(overview_data: dict[str, Any]) -> dict[str, Any]:
     payload = {key: value for key, value in overview_data.items() if key != "changes"}
+    # Include the ACTUAL field-level before/after so the model can read what changed,
+    # not just which fields changed. The diff is already secret-stripped upstream
+    # (engine.diff -> strip_for_hash), so no secret/ignored content reaches here.
+    payload["field_diffs"] = [
+        {
+            "path": change.get("path"),
+            "op": change.get("op"),
+            "before": _truncate(change.get("before")),
+            "after": _truncate(change.get("after")),
+        }
+        for change in overview_data.get("changes", [])
+    ]
     payload["affected_records"] = [
         {
             "collection": item.get("collection"),

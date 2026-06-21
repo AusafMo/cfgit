@@ -27,8 +27,17 @@ Include:
 - Keep production write credentials out of `.cfg.toml`.
 - Prefer `env:VAR_NAME` URI references.
 - Use `secret_fields` for credentials inside versioned records.
+- Pick an identity posture per environment:
+  - `open` records self-asserted attribution only.
+  - `authenticated` requires a verified cfgit identity for mutations.
+  - `enforced` also requires database-side write credential lockdown.
+- For token identity, store only full SHA-256 hashes in config. Keep each human's
+  raw token string local, and treat the short fingerprint as display-only.
 - Run `cfg restore --dry-run` before system restore.
 - Keep database backups independent of cfgit history.
 
 cfgit is a version-control sidecar. It is not a replacement for backups,
 credential management, database access control, or audit log retention.
+
+See [Identity & Attribution](docs/IDENTITY_AND_ATTRIBUTION.md) for the full
+model and limits.

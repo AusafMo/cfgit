@@ -143,12 +143,13 @@ Commands and surfaces (CLI + `--json`, localhost UI, MCP), each across **all con
 - `cfg adopt <record>` / `cfg adopt --all`: fold an out-of-band change into history with attribution (the reconciliation core). Cron-friendly.
 - `cfg fsck`: integrity + drift sweep.
 - `cfg impact <record> [a] [b]`: deterministic system-impact overview, with optional LLM narration from the `cfg-impact` plugin.
+- `cfg identity-hash`: hash a private human token for authenticated identity config without storing the raw token.
 - `cfg ui`: local web UI for the same operations.
 - `cfg-mcp`: MCP server exposing the same operation envelope to agents.
-- Optional mutation permissions at the same engine boundary as every write: open by default, or restricted to configured `admins` / `writers`, with admin-only actions such as `restore_system`. This is not a hosted RBAC product; it is a local safety rail for teams that want only an admin to press the system-restore button.
+- Optional identity + mutation permissions at the same engine boundary as every write: open by default, or authenticated/enforced per environment, then restricted to configured `admins` / `writers` when role checks are enabled. This is not a hosted RBAC product; it is a local safety rail for teams that want trustworthy attribution or only an admin to press the system-restore button.
 
 **Deferred (build only on a real incident or real adoption), with where they live in `docs/SPEC.md`:**
-- **Approval gating / human-in-the-loop on prod** (SPEC §10–§11). Deferred because the flat team won't gate peers by default; revisit when an *agent* writes prod, or when the team actually wants a separate approval checkpoint. The v1 permission gate is local author authorization, not out-of-band approval.
+- **Approval gating / human-in-the-loop on prod** (SPEC §10–§11). Deferred because the flat team won't gate peers by default; revisit when an *agent* writes prod, or when the team actually wants a separate approval checkpoint. The v1 gate is identity/authz at the cfgit mutation boundary, not out-of-band approval.
 - **Hosted UI / hosted approval platform.** The current UI binds locally and does not become a multi-user product.
 - **Deep impact graph.** The first impact layer is deterministic path/category/reference analysis plus optional narration. Rich project-specific edge extractors stay plugin territory.
 - **Config-specific furniture moves OUT of core into adapter-config/plugins:** `--strip-backups` (the `instructions_backup_*` cleanup) and the `is_active` activation verb are origin-schema features, not general VC. Keep the general core schema-agnostic.
@@ -176,6 +177,10 @@ mode = "open"                    # open | restricted
 admins = []                      # authors with every mutation permission
 writers = []                     # authors allowed to commit/adopt/tag/restore records
 admin_actions = ["restore_system"]
+
+[env.prod.identity]
+mode = "authenticated"           # open | authenticated | enforced
+sources = ["token", "db_principal"]
 
 [env.prod.permissions]
 mode = "restricted"

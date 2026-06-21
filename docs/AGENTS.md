@@ -19,6 +19,30 @@ Recommended agent flow:
 If status is `changed_outside_cfgit`, do not commit over it. Diff it, explain it,
 then ask whether to adopt it or merge manually.
 
+## Agent Identity
+
+In `authenticated` or `enforced` environments, run the agent process with its own
+private token:
+
+```bash
+export CFGIT_IDENTITY_TOKEN='agent-private-string'
+cfg whoami
+```
+
+Configure only the token hash in `.cfg.toml`, mapped to an agent author such as
+`codex-agent@example.com`. The MCP `author` argument is only a hint in verified
+modes; cfgit refuses it if it does not match the token or DB principal identity.
+
+For real human or agent setup secrets, prefer local hashing:
+
+```bash
+printf '%s' 'agent-private-string' | cfg identity-hash --stdin
+```
+
+The MCP server also exposes `cfg_identity_hash` for setup convenience, but tool
+inputs may be visible to the MCP client. Do not send real production identity
+tokens through MCP unless that client/session is trusted for secrets.
+
 ## MCP server
 
 Install the MCP extra:
@@ -59,6 +83,7 @@ Tool list:
 - `cfg_restore`
 - `cfg_tag`
 - `cfg_fsck`
+- `cfg_identity_hash`
 
 ## Portable skill
 
@@ -69,7 +94,8 @@ skills/cfgit/SKILL.md
 ```
 
 It is intentionally plain. It tells a coding agent how to inspect first, branch on
-drift, avoid raw database writes, and use JSON output.
+drift, avoid raw database writes, use JSON output, and treat verified identity
+as token/DB-principal based rather than author-string based.
 
 ## Impact plugin
 

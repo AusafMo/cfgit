@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from cfg.adapters.base import (
     AmbiguousConfig,
@@ -337,6 +338,33 @@ class MongoAdapter:
 
     def supports_transactions(self) -> bool:
         return self._supports_transactions(self.history_client)
+
+    def authenticated_principal(self) -> str | None:
+        try:
+            status = self.runtime_client.admin.command("connectionStatus")
+            users = ((status.get("authInfo") or {}).get("authenticatedUsers") or [])
+            if users:
+                user = users[0]
+                name = str(user.get("user") or "").strip()
+                db = str(user.get("db") or "").strip()
+                if name and db:
+                    return f"{name}@{db}"
+                if name:
+                    return name
+        except Exception:
+            pass
+        parsed = urlsplit(self.runtime_uri)
+        username = unquote(parsed.username or "").strip()
+        auth_source = ""
+        if parsed.query:
+            for part in parsed.query.split("&"):
+                key, _, value = part.partition("=")
+                if key.lower() == "authsource":
+                    auth_source = unquote(value)
+                    break
+        if username and auth_source:
+            return f"{username}@{auth_source}"
+        return username or None
 
     def now(self) -> datetime:
         return datetime.now(timezone.utc)

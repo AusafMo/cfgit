@@ -5,7 +5,7 @@ import re
 import sys
 
 from cfg.core.config import CollectionConfig, ConnectionsConfig, EnvConfig, HistoryConfig, ProjectConfig, load_config
-from cfg.core.engine import Engine
+from cfg.core.engine import Engine, RecordRef
 from cfg.core.hashing import hash_doc
 
 from tests.test_engine_safety import FakeAdapter
@@ -97,7 +97,83 @@ def test_llm_prompt_payload_never_contains_raw_changes() -> None:
     ]
 
 
-def _impact_engine(*, share_with_ai: tuple[str, ...]) -> Engine:
+def test_impact_payload_includes_actual_field_diff_values() -> None:
+    sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
+    try:
+        from cfg_impact.overview import _overview_prompt_payload
+    finally:
+        sys.path.pop(0)
+
+    payload = _overview_prompt_payload(
+        {
+            "record": "demo:alpha",
+            "changes": [{"path": "/instructions", "op": "change", "before": "do x", "after": "do y"}],
+            "affected_records": [],
+        }
+    )
+
+    assert payload["field_diffs"] == [
+        {"path": "/instructions", "op": "change", "before": "do x", "after": "do y"}
+    ]
+    assert "changes" not in payload
+
+
+def test_changed_string_values_reads_before_after_keys() -> None:
+    sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
+    try:
+        from cfg_impact.overview import _changed_string_values
+    finally:
+        sys.path.pop(0)
+
+    values = _changed_string_values(
+        [{"path": "/tool", "op": "change", "before": "old_tool", "after": "new_tool"}]
+    )
+
+    assert "old_tool" in values
+    assert "new_tool" in values
+
+
+def test_system_map_gates_contract_and_instruction_text() -> None:
+    sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
+    try:
+        from cfg_impact.overview import _system_map
+    finally:
+        sys.path.pop(0)
+
+    engine = _impact_engine(
+        share_with_ai=("demo:alpha",),
+        extra_records={
+            ("demo", "beta"): {
+                "id": "beta",
+                "tools": ["planner"],
+                "phase_contract": "handoff must include exact citation ids",
+                "instructions": "very private operating instruction",
+            }
+        },
+    )
+
+    gated = _system_map(engine, exclude=RecordRef("demo", "alpha"), allow={"demo:alpha"})
+
+    assert gated["configs"][0]["record_id"] == "beta"
+    assert gated["configs"][0]["text_withheld"] == "not in share_with_ai"
+    assert "contract" not in gated["configs"][0]
+    assert "instructions_excerpt" not in gated["configs"][0]
+
+    allowed = _system_map(
+        engine,
+        exclude=RecordRef("demo", "alpha"),
+        allow={"demo:alpha", "demo:beta"},
+    )
+
+    assert allowed["configs"][0]["contract"] == "handoff must include exact citation ids"
+    assert allowed["configs"][0]["instructions_excerpt"] == "very private operating instruction"
+
+
+def _impact_engine(
+    *,
+    share_with_ai: tuple[str, ...],
+    extra_records: dict[tuple[str, str], dict[str, object]] | None = None,
+) -> Engine:
     coll = CollectionConfig(name="demo", id_field="id", secret_fields=("api_key",))
     head_doc = {"id": "alpha", "value": "old", "api_key": "sk-secret"}
     live_doc = {"id": "alpha", "value": "new", "api_key": "sk-secret"}
@@ -129,9 +205,11 @@ def _impact_engine(*, share_with_ai: tuple[str, ...]) -> Engine:
         envs={"dev": EnvConfig(name="dev", database="fake", uri="", db="test")},
         connections=ConnectionsConfig(ai_provider="openai", share_with_ai=share_with_ai),
     )
+    records = {("demo", "alpha"): live_doc}
+    records.update(extra_records or {})
     adapter = FakeAdapter(
         project=project,
-        records={("demo", "alpha"): live_doc},
+        records=records,
         history=[head],
         heads={("demo", "alpha"): head},
     )

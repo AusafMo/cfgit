@@ -5,24 +5,38 @@ from __future__ import annotations
 import fnmatch
 
 from cfg.core.config import EnvConfig, PermissionConfig
+from cfg.core.identity import Identity, self_asserted_identity
 
 
 class PermissionDenied(Exception):
     """The resolved author is not allowed to perform this mutation."""
 
 
-def authorize_mutation(env: EnvConfig, *, author: str, action: str) -> None:
-    role = permission_role(env.permissions, author)
+def authorize_mutation(
+    env: EnvConfig,
+    *,
+    action: str,
+    identity: Identity | None = None,
+    author: str | None = None,
+) -> None:
+    resolved = identity or self_asserted_identity(author or "", cfg=env.identity)
+    if env.identity.mode in {"authenticated", "enforced"} and not resolved.authenticated:
+        raise PermissionDenied(
+            f"{resolved.author} cannot run {action} on {env.name}: "
+            f"{env.identity.mode} identity required"
+        )
+
+    role = permission_role(env.permissions, resolved.author)
     admin_only = _matches(action, env.permissions.admin_actions)
 
     if admin_only and role != "admin":
         raise PermissionDenied(
-            f"{author} cannot run {action} on {env.name}: admin permission required"
+            f"{resolved.author} cannot run {action} on {env.name}: admin permission required"
         )
 
     if env.permissions.mode == "restricted" and role not in {"admin", "writer"}:
         raise PermissionDenied(
-            f"{author} cannot run {action} on {env.name}: writer permission required"
+            f"{resolved.author} cannot run {action} on {env.name}: writer permission required"
         )
 
 

@@ -29,6 +29,9 @@ uri = "env:DEV_MONGODB_URI"
 db = "my-dev-db"
 needs_approval = false
 
+[env.dev.identity]
+mode = "open"
+
 [env.dev.permissions]
 mode = "open"
 admins = []
@@ -126,6 +129,55 @@ Roles:
 
 Patterns use shell-style matching.
 
+## Identity
+
+Identity controls how much cfgit trusts the `author` it records. It is
+configured per environment.
+
+```toml
+[env.dev.identity]
+mode = "open"
+fingerprint_chars = 5
+
+[env.prod.identity]
+mode = "authenticated"
+sources = ["token", "db_principal"]
+token_env = "CFGIT_IDENTITY_TOKEN"
+fingerprint_chars = 5
+principal_map = { "alice_db" = "alice@example.com" }
+tokens = [
+  { author = "alice@example.com", name = "alice-main", sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
+]
+```
+
+Modes:
+
+- `open`: default. `--author`, `CFG_AUTHOR`, git email, or OS user is recorded.
+  This is attribution, not authentication.
+- `authenticated`: mutating cfgit operations require a verified identity. Users
+  may still hold DB write credentials; bypass is detected by drift.
+- `enforced`: same cfgit-side verified identity, intended for environments where
+  database write credentials are also locked down to cfgit or CI.
+
+Sources:
+
+- `token`: cfgit reads the private human token from `token_env`, hashes the full
+  value with SHA-256, and compares it to configured token hashes. Humans can use
+  memorable private strings, but only the full hash is proof.
+- `db_principal`: cfgit asks the adapter for the authenticated database principal.
+  Postgres uses `current_user`; Mongo uses `connectionStatus` or the URI username
+  when available.
+
+The short fingerprint is display-only. It appears in `cfg whoami` and history
+metadata so humans can distinguish identities; cfgit never accepts that short
+value as authentication.
+
+Generate a token hash without putting the token in shell history:
+
+```bash
+printf '%s' 'imkanyewest' | cfg identity-hash --stdin
+```
+
 ## Connections
 
 `[connections]` configures impact summaries and optional LLM narration.
@@ -159,9 +211,13 @@ Fields:
 from = "git"
 ```
 
-Current author resolution:
+Open-mode author resolution:
 
 1. `--author`
 2. `CFG_AUTHOR`
 3. `git config user.email`
 4. local OS user
+
+In `authenticated` or `enforced` identity mode, `--author` is only a hint. If it
+does not match the verified token or database principal identity, cfgit refuses
+the operation.
