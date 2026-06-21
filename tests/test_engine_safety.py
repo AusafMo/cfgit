@@ -76,7 +76,10 @@ def test_secret_fields_are_stripped_instead_of_blocked() -> None:
 
     assert result[0]["state"] == "imported"
     assert "api_key" not in adapter.history[-1]["doc"]
-    assert set(adapter.history[-1]["meta"]) == {"identity"}
+    meta = adapter.history[-1]["meta"]
+    assert set(meta) == {"identity"}
+    assert "allow_secret" not in meta
+    assert "secret_matches" not in meta
 
 
 def test_authenticated_identity_is_recorded_in_history_meta() -> None:
@@ -164,6 +167,7 @@ class FakeAdapter:
         history: list[dict[str, Any]] | None = None,
         heads: dict[tuple[str, str], dict[str, Any]] | None = None,
         principal: str | None = None,
+        invariant_violations: list[str] | None = None,
     ):
         self.project = project
         self.env_name = "dev"
@@ -172,6 +176,7 @@ class FakeAdapter:
         self.heads = deepcopy(heads or {})
         self.atomic = True
         self.principal = principal
+        self.invariant_violations = invariant_violations or []
         self.clock = datetime(2026, 6, 21, tzinfo=timezone.utc)
 
     def get_record(self, collection: str, record_id: str) -> dict | None:
@@ -299,7 +304,7 @@ class FakeAdapter:
         return None
 
     def check_runtime_invariant(self, collection: str | None = None) -> list[str]:
-        return []
+        return list(self.invariant_violations)
 
     def check_atomicity_scope(self) -> AtomicityReport:
         return AtomicityReport(
@@ -331,6 +336,7 @@ def _engine(
     secrets: SecretsConfig | None = None,
     identity: Identity | None = None,
     identity_config: IdentityConfig | None = None,
+    invariant_violations: list[str] | None = None,
 ) -> tuple[Engine, FakeAdapter]:
     coll = collection or CollectionConfig(name="demo", id_field="id")
     project = ProjectConfig(
@@ -349,7 +355,13 @@ def _engine(
         },
         secrets=secrets or SecretsConfig(),
     )
-    adapter = FakeAdapter(project=project, records=records, history=history, heads=heads)
+    adapter = FakeAdapter(
+        project=project,
+        records=records,
+        history=history,
+        heads=heads,
+        invariant_violations=invariant_violations,
+    )
     return Engine(project, adapter, env="dev", author="dev@example.com", identity=identity), adapter
 
 
@@ -381,3 +393,89 @@ def _history_row(
         "tags": [],
         "meta": {},
     }
+
+
+def test_doctor_clean_when_no_issues() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    engine, _ = _engine(
+        collection=coll,
+        records={("demo", "alpha"): {"id": "alpha", "value": 1}},
+    )
+    report = engine.doctor()
+    assert report["ok"] is True
+    assert report["scanned"] == 1
+    assert report["secret_blocks"] == []
+    assert report["large_fields"] == []
+
+
+def test_doctor_groups_secret_hits_and_suggests_secret_fields() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    engine, _ = _engine(
+        collection=coll,
+        records={
+            ("demo", "a"): {"id": "a", "provider_config": {"api_key": "plain1"}},
+            ("demo", "b"): {"id": "b", "provider_config": {"api_key": "plain2"}},
+        },
+        secrets=SecretsConfig(block_fields=("*api_key*",)),
+    )
+    report = engine.doctor()
+    assert report["ok"] is False
+    # two records, same field path -> one grouped block with count 2
+    blocks = [b for b in report["secret_blocks"] if b["path"] == "provider_config.api_key"]
+    assert len(blocks) == 1
+    assert blocks[0]["count"] == 2
+    assert blocks[0]["kind"] == "field"
+    assert "provider_config.api_key" in report["suggestions"]["demo"]["secret_fields"]
+
+
+def test_doctor_rolls_nested_secret_path_up_to_container() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    engine, _ = _engine(
+        collection=coll,
+        records={
+            ("demo", "a"): {
+                "id": "a",
+                "schema": {"properties": {"openai_api_key": {"type": "string", "title": "Key"}}},
+            }
+        },
+        secrets=SecretsConfig(block_fields=("*api_key*",)),
+    )
+    report = engine.doctor()
+    # the two leaf hits (.type, .title) collapse to one container suggestion
+    sf = report["suggestions"]["demo"]["secret_fields"]
+    assert sf == ["schema.properties.openai_api_key"]
+
+
+def test_doctor_flags_value_match_and_large_field() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    engine, _ = _engine(
+        collection=coll,
+        records={
+            ("demo", "a"): {
+                "id": "a",
+                "headers": {"X-Auth": "sk-ABCDEFGHIJKLMNOPQRSTUVWX"},
+                "blob": "x" * 30000,
+            }
+        },
+        secrets=SecretsConfig(block_values=("sk-[A-Za-z0-9]{20,}",)),
+    )
+    report = engine.doctor(large_field_bytes=20000)
+    assert any(b["kind"] == "value" for b in report["secret_blocks"])
+    large = report["large_fields"]
+    assert len(large) == 1 and large[0]["path"] == "blob"
+    assert large[0]["max_bytes"] >= 30000
+    assert "blob" in report["suggestions"]["demo"]["ignore_fields"]
+
+
+def test_doctor_reports_runtime_invariant_violations() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    engine, _ = _engine(
+        collection=coll,
+        records={("demo", "alpha"): {"id": "alpha", "value": 1}},
+        invariant_violations=["demo:alpha (2 live records)"],
+    )
+
+    report = engine.doctor()
+
+    assert report["ok"] is False
+    assert report["key_issues"] == ["demo:alpha (2 live records)"]

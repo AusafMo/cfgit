@@ -118,6 +118,77 @@ class Engine:
             results.append({"collection": item.collection, "record_id": item.record_id, "state": "imported", "seq": result.seq, "oid": result.oid})
         return results
 
+    def doctor(self, ref: RecordRef | None = None, *, large_field_bytes: int = 20000) -> dict[str, Any]:
+        """Read-only preflight. Walks live records and reports what would trip an
+        import/commit BEFORE anything is written: secret-deny matches (grouped by
+        field path), oversized fields, and id values that are not unique under
+        live_when. Writes nothing. Returns a structured report plus paste-ready
+        config snippets so the user can fix .cfg.toml in one pass.
+        """
+        refs = [ref] if ref else self._all_refs(include_history=False)
+        # group secret hits by (collection, field path) so 200 docs with the same
+        # schema field collapse to one actionable line.
+        secret_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+        large_groups: dict[tuple[str, str], dict[str, Any]] = {}
+        invariant_violations = self.adapter.check_runtime_invariant(ref.collection if ref else None)
+        scanned = 0
+        for item in refs:
+            live = self.adapter.get_record(item.collection, item.record_id)
+            if live is None:
+                continue
+            scanned += 1
+            coll = self.config.collection(item.collection)
+            scan = stored_doc(live, coll)  # same view the secret scan + storage use
+            for match in _secret_matches(scan, self.config.secrets.block_fields, self.config.secrets.block_values):
+                # normalize list indices so foo[0].bar and foo[3].bar group together
+                norm = re.sub(r"\[\d+\]", "[]", match["path"])
+                key = (item.collection, norm, match["kind"])
+                g = secret_groups.setdefault(key, {"collection": item.collection, "path": norm,
+                                                    "kind": match["kind"], "pattern": match["pattern"],
+                                                    "count": 0, "example": item.record_id})
+                g["count"] += 1
+            for path, value in _walk_doc(scan):
+                size = len(value) if isinstance(value, (str, bytes)) else 0
+                if size >= large_field_bytes:
+                    norm = re.sub(r"\[\d+\]", "[]", path)
+                    key = (item.collection, norm)
+                    g = large_groups.setdefault(key, {"collection": item.collection, "path": norm,
+                                                       "count": 0, "max_bytes": 0, "example": item.record_id})
+                    g["count"] += 1
+                    g["max_bytes"] = max(g["max_bytes"], size)
+        secrets = sorted(secret_groups.values(), key=lambda g: (g["collection"], g["path"]))
+        large = sorted(large_groups.values(), key=lambda g: (-g["max_bytes"], g["collection"]))
+        # build paste-ready fix snippets per collection. Roll each secret path UP to its
+        # secret-bearing container so 9 sub-paths under ...openai_api_key collapse to the
+        # one container that, stripped, removes them all. Detailed paths stay in
+        # secret_blocks for transparency; suggestions stay short and pasteable.
+        suggestions: dict[str, dict[str, list[str]]] = {}
+        for g in secrets:
+            container = _secret_container(g["path"], self.config.secrets.block_fields)
+            sf = suggestions.setdefault(g["collection"], {}).setdefault("secret_fields", [])
+            if container not in sf:
+                sf.append(container)
+        for g in large:
+            ig = suggestions.setdefault(g["collection"], {}).setdefault("ignore_fields", [])
+            if g["path"] not in ig:
+                ig.append(g["path"])
+        # drop any suggested secret_field that is a child of another suggested one
+        for entry in suggestions.values():
+            sf = entry.get("secret_fields")
+            if sf:
+                entry["secret_fields"] = [p for p in sf
+                                          if not any(p != q and p.startswith(q + ".") for q in sf)]
+        ok = not secrets and not large and not invariant_violations
+        return {
+            "ok": ok,
+            "scanned": scanned,
+            "secret_blocks": secrets,
+            "large_fields": large,
+            "key_issues": invariant_violations,
+            "suggestions": suggestions,
+            "large_field_bytes": large_field_bytes,
+        }
+
     def adopt(self, ref: RecordRef, *, message: str, allow_secret: bool = False) -> dict[str, Any]:
         self._authorize("adopt")
         self._ensure_atomic("adopt")
@@ -549,11 +620,22 @@ class Engine:
         if not matches:
             return {}
         if self.config.secrets.on_match == "refuse" and not allow_secret:
-            rendered = ", ".join(f"{item['path']} ({item['kind']}:{item['pattern']})" for item in matches[:8])
-            more = f" and {len(matches) - 8} more" if len(matches) > 8 else ""
+            # group by normalized path so list-index/duplicate hits collapse, and
+            # give the exact secret_fields lines to paste — one fix pass, not N.
+            seen: dict[str, str] = {}
+            for item in matches:
+                norm = re.sub(r"\[\d+\]", "[]", item["path"])
+                seen.setdefault(norm, item["kind"])
+            paths = sorted(seen)
+            shown = ", ".join(f"{p} ({seen[p]})" for p in paths[:8])
+            more = f" and {len(paths) - 8} more" if len(paths) > 8 else ""
+            snippet = ", ".join(f'"{p}"' for p in paths)
             raise SecretBlocked(
-                f"secret-like content refused in {rendered}{more}; add the path to secret_fields "
-                "or rerun with --allow-secret if this is intentional"
+                f"secret-like content refused in {len(paths)} field(s): {shown}{more}. "
+                f"These are stripped from history if you add them to this collection's "
+                f"secret_fields:\n  secret_fields = [{snippet}]\n"
+                f"Run `cfg doctor` to see every collection at once, or rerun with "
+                f"--allow-secret if this is intentional."
             )
         return {
             "allow_secret": bool(allow_secret),
@@ -598,6 +680,20 @@ def _secret_matches(
                     matches.append({"path": path, "kind": "value", "pattern": pattern})
                     break
     return matches
+
+
+def _secret_container(path: str, field_patterns: tuple[str, ...]) -> str:
+    """Roll a dotted path up to its shallowest secret-bearing segment, so a stripping
+    suggestion covers the whole subtree. For
+    `cached_schema...properties.openai_api_key.type` with a `*api_key*` pattern, returns
+    `cached_schema...properties.openai_api_key` (stripping that removes all its children).
+    If no segment matches a field pattern (e.g. a value-only match), returns path as-is."""
+    segments = path.split(".")
+    for i, seg in enumerate(segments):
+        base = seg.split("[", 1)[0]
+        if any(fnmatch.fnmatchcase(base, pat) for pat in field_patterns):
+            return ".".join(segments[: i + 1])
+    return path
 
 
 def _walk_doc(value: Any, prefix: str = "") -> list[tuple[str, Any]]:

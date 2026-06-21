@@ -14,10 +14,14 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Treat `changed_outside_cfgit` as the central state. Do not commit over it. Run `cfg diff`, explain what changed, then `cfg adopt` if the user wants to fold that live state into history.
 - Prefer `--json` for agent parsing.
 - Use deterministic `cfg impact` first. Add `--llm` only when the user asks for LLM narration and the impact plugin is installed. Use `--against <collection:id>` when the user wants narration scoped to specific related records instead of the whole system.
+- Before the FIRST `cfg import` against a new database or `.cfg.toml`, run `cfg doctor` (read-only). It reports every secret-deny match, oversized field, and key issue at once, with paste-ready `secret_fields`/`ignore_fields` snippets. Fix `.cfg.toml` from its output, then import. This avoids import failing one secret at a time.
 - In `authenticated` or `enforced` identity mode, the process must already have a verified identity source, usually `CFGIT_IDENTITY_TOKEN` or a per-user DB principal. `--author` and MCP `author` are hints only; cfgit rejects them if they do not match the verified identity.
 - Never paste raw human identity tokens into prompts, logs, commits, or history. For real setup secrets, prefer local CLI hashing: `printf '%s' '<private-token>' | cfg identity-hash --stdin`.
 
 ## Workflow
+
+0. Preflight a new config (first import only).
+   - `cfg doctor --json` (writes nothing). If `ok` is false, apply the `suggestions` to `.cfg.toml` and re-run until clean.
 
 1. Identify the env and record.
    - Record syntax is `collection:id`, for example `agent_configs:agent_planner`.
@@ -50,6 +54,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 If the cfgit MCP server is available, prefer its tools over shelling out:
 
 - `cfg_status`
+- `cfg_doctor`
 - `cfg_diff`
 - `cfg_impact`
 - `cfg_commit`

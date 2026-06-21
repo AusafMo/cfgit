@@ -105,6 +105,15 @@ def status(engine: Engine, record: str | None = None) -> tuple[list[Any], int]:
     return rows, code
 
 
+def doctor(engine: Engine, record: str | None = None, *, large_field_bytes: int = 20000) -> tuple[dict[str, Any], int]:
+    report = engine.doctor(
+        parse_record(record) if record else None,
+        large_field_bytes=large_field_bytes,
+    )
+    code = EXIT_OK if report.get("ok") else EXIT_DIRTY
+    return report, code
+
+
 def import_records(
     engine: Engine,
     record: str | None,
@@ -249,6 +258,12 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
         return init(engine)
     if name == "status":
         return status(engine, _blank_to_none(payload.get("record")))
+    if name == "doctor":
+        return doctor(
+            engine,
+            _blank_to_none(payload.get("record")),
+            large_field_bytes=int(payload.get("large_field_bytes") or 20000),
+        )
     if name == "import":
         return import_records(
             engine,
