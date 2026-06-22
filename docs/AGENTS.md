@@ -98,6 +98,11 @@ comma/space-separated string when narration should be scoped to selected records
 (`[{record, doc}]`), a mapping (`{"collection:id": doc}`), or a JSON string in
 either shape.
 
+If `cfg_log`, `cfg_show`, or a diff/impact path returns `bad_config` saying
+history exists under another env, the same history store has been opened under a
+different env name. Switch to the env named in the message or fix `.cfg.toml`
+before mutating anything.
+
 ## Portable skill
 
 The skill file is:

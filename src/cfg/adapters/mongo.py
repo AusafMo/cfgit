@@ -12,10 +12,12 @@ from cfg.adapters.base import (
     ApplyResult,
     AtomicityUnavailable,
     AtomicityReport,
+    HistoryEnvMismatch,
     NoSuchConfig,
     ReconcileReport,
     StaleHead,
     StaleLive,
+    history_env_mismatch_message,
 )
 from cfg.core.config import ProjectConfig
 from cfg.core.hashing import hash_doc
@@ -120,7 +122,10 @@ class MongoAdapter:
         )
         if limit is not None:
             cursor = cursor.limit(limit)
-        return [_history_row(row, with_doc=with_doc) for row in cursor]
+        rows = [_history_row(row, with_doc=with_doc) for row in cursor]
+        if not rows and limit != 0 and collection is not None and record_id is not None:
+            self._raise_env_mismatch_if_history_exists(collection, record_id, query)
+        return rows
 
     def list_tags(self) -> list[dict]:
         pipeline = [
@@ -376,6 +381,32 @@ class MongoAdapter:
     def _head_query(self, collection: str, record_id: str) -> dict[str, Any]:
         return {"env": self.env_name, "collection": collection, "record_id": record_id}
 
+    def _raise_env_mismatch_if_history_exists(
+        self,
+        collection: str,
+        record_id: str,
+        current_query: dict[str, Any],
+    ) -> None:
+        history_query = {key: value for key, value in current_query.items() if key != "env"}
+        history_envs = self.history.distinct("env", history_query)
+        if self.env_name in {str(env) for env in history_envs or []}:
+            return
+        head_envs = []
+        if set(history_query) == {"collection", "record_id"}:
+            head_envs = self.heads.distinct("env", history_query)
+            if self.env_name in {str(env) for env in head_envs or []}:
+                return
+        other_envs = _other_env_names(history_envs, head_envs, current=self.env_name)
+        if other_envs:
+            raise HistoryEnvMismatch(
+                history_env_mismatch_message(
+                    collection=collection,
+                    record_id=record_id,
+                    current_env=self.env_name,
+                    other_envs=other_envs,
+                )
+            )
+
     def _get_record(self, collection: str, record_id: str, *, session: ClientSession | None) -> dict | None:
         docs = list(self.db[collection].find(self._runtime_query(collection, record_id), session=session).limit(2))
         if len(docs) > 1:
@@ -460,6 +491,18 @@ class MongoAdapter:
 
 def _history_row(row: dict[str, Any], *, with_doc: bool) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key != "_id" and (with_doc or key != "doc")}
+
+
+def _other_env_names(*env_lists: Any, current: str) -> list[str]:
+    seen: set[str] = set()
+    for envs in env_lists:
+        for env in envs or []:
+            if env is None:
+                continue
+            name = str(env)
+            if name and name != current:
+                seen.add(name)
+    return sorted(seen)
 
 
 def _get_path(doc: dict[str, Any], dotted: str) -> Any:

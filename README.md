@@ -158,6 +158,18 @@ writers = []
 admin_actions = ["restore_system"]
 ```
 
+You can define multiple `[env.<name>]` blocks, but one cfgit command opens one
+env at a time:
+
+```bash
+cfg --env dev status
+cfg --env prod log agent_configs:agent_planner
+```
+
+Keep each physical history store under one stable env name. If the same database
+is later addressed as a different env, cfgit will report that history exists
+under the original env instead of returning an empty log.
+
 Point it at a local or staging database first:
 
 ```bash
@@ -303,6 +315,10 @@ cfg ui
 cfg ui --port 9000 --no-open
 ```
 
+If you omit `--port`, cfgit will try the next free local ports. If you pass
+`--port` explicitly, cfgit treats that port as intentional and fails if it is
+already in use.
+
 ## MCP and agent usage
 
 The MCP server exposes the same operations with a uniform envelope:
@@ -336,6 +352,11 @@ Tools include:
 A portable skill lives at `skills/cfgit/SKILL.md`.
 `cfg_impact` accepts the same `against` list/string as the CLI `--against` flag,
 so MCP clients can request scoped narration without shelling out.
+
+If `cfg_log` or `cfg_show` returns `bad_config` with a message saying history
+exists under another env, the same database has been addressed with two
+different `.cfg.toml` env names. Re-run with the env that wrote the history, or
+standardize the config so that database always uses one env name.
 
 ## Impact summaries
 

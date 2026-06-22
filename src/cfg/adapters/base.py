@@ -28,6 +28,10 @@ class AmbiguousConfig(Exception):
     """More than one live record matched a collection id. Exit 6."""
 
 
+class HistoryEnvMismatch(AmbiguousConfig):
+    """History for this record exists under another configured env name. Exit 6."""
+
+
 class NoSuchConfig(Exception):
     """No live record matched where one was required. Exit 5."""
 
@@ -58,6 +62,22 @@ class AtomicityReport:
     runtime_cluster: str
     history_cluster: str
     reason: str
+
+
+def history_env_mismatch_message(
+    *,
+    collection: str,
+    record_id: str,
+    current_env: str,
+    other_envs: list[str],
+) -> str:
+    env_list = ", ".join(other_envs)
+    return (
+        f"no history found for {collection}:{record_id} under env={current_env!r}, "
+        f"but history/head rows exist under env(s): {env_list}. "
+        "Run with the env name that originally wrote this history, or update .cfg.toml so "
+        "this database is always addressed with one stable env name."
+    )
 
 
 @runtime_checkable

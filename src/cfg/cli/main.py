@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     json_mode = "--json" in raw_argv
     raw_argv = [item for item in raw_argv if item != "--json"]
+    explicit_ui_port = _has_option(raw_argv, "--port")
     args = parser.parse_args(raw_argv)
     args.json = bool(args.json or json_mode)
     if args.cmd == "ui":
@@ -46,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             host=args.host,
             port=args.port,
             open_browser=not args.no_open,
+            allow_port_fallback=not explicit_ui_port,
         )
     if args.cmd == "identity-hash":
         try:
@@ -180,6 +182,10 @@ def _parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--port", type=int, default=8765)
     p_ui.add_argument("--no-open", action="store_true")
     return parser
+
+
+def _has_option(argv: list[str], name: str) -> bool:
+    return any(item == name or item.startswith(f"{name}=") for item in argv)
 
 
 def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
