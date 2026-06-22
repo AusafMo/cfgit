@@ -13,11 +13,17 @@ Recommended agent flow:
 1. `cfg_status`
 2. `cfg_diff` if there is drift or a planned edit
 3. `cfg_impact` before committing behavior-affecting records
-4. `cfg_commit` or `cfg_adopt`
+4. `cfg_commit`, `cfg_bulk_commit`, or `cfg_adopt`
 5. `cfg_status` again
 
 If status is `changed_outside_cfgit`, do not commit over it. Diff it, explain it,
 then ask whether to adopt it or merge manually.
+
+For coupled multi-record edits, prefer one `cfg_bulk_commit` call over several
+independent `cfg_commit` calls. It preflights every target first, so a known drift
+or secret-policy failure blocks the whole batch before any record is written.
+If it returns `blocked`, nothing was applied. If it returns `partial`, inspect
+`results`, `failed`, and `pending` before continuing.
 
 ## Agent Identity
 
@@ -77,6 +83,7 @@ Tool list:
 - `cfg_diff`
 - `cfg_impact`
 - `cfg_commit`
+- `cfg_bulk_commit`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`
@@ -87,6 +94,9 @@ Tool list:
 
 `cfg_impact` accepts `against` as either a list of `collection:id` strings or a
 comma/space-separated string when narration should be scoped to selected records.
+`cfg_bulk_commit` accepts `items` as either a structured list
+(`[{record, doc}]`), a mapping (`{"collection:id": doc}`), or a JSON string in
+either shape.
 
 ## Portable skill
 

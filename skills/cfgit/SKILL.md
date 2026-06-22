@@ -37,7 +37,9 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 3. Mutate through cfgit.
    - Write the full target document to a temp JSON file.
    - Run `cfg commit <record> --from <file> -m "<message>" --json`.
+   - For a coupled multi-record change, write a batch JSON file and run `cfg commit --bulk-from <file> -m "<message>" --json`. The batch file can be `[{"record":"collection:id","doc":{...}}]` or `{"collection:id": {...}}`.
    - If commit returns `changed_outside_cfgit`, stop and inspect drift.
+   - If bulk commit returns `blocked`, no record was applied; inspect `failed`. If it returns `partial`, some records were applied before a race/failure; inspect `results`, `failed`, and `pending` before continuing.
    - If the result is `identity_required` or `forbidden`, do not retry with another author's string. Ask the user to provide the correct token/DB principal or change permissions.
 
 4. Reconcile drift.
@@ -58,6 +60,7 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_diff`
 - `cfg_impact`
 - `cfg_commit`
+- `cfg_bulk_commit`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`
@@ -69,3 +72,4 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_identity_hash` for setup only. Prefer the local CLI for real tokens because MCP clients may log tool inputs.
 
 Every MCP tool returns the same envelope shape as the CLI exit status: `status`, `code`, `message`, `data`.
+For MCP bulk commits, pass `items` as structured JSON (`[{record, doc}]`) when the client supports it; use a JSON string only when the client cannot send nested objects cleanly.

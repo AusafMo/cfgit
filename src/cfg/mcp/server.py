@@ -155,6 +155,30 @@ def cfg_commit(
 
 
 @mcp.tool()
+def cfg_bulk_commit(
+    items: list[dict[str, Any]] | dict[str, Any] | str,
+    message: str,
+    allow_secret: bool = False,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Commit multiple full documents as one batch intent.
+
+    `items` may be either:
+    [{"record":"collection:id","doc":{...}}, ...]
+    {"collection:id": {...}, ...}, or a JSON string in either shape.
+    """
+    return _call(
+        "bulk_commit",
+        {"items": items, "message": message, "allow_secret": allow_secret},
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
 def cfg_log(
     record: str,
     limit: int = 20,

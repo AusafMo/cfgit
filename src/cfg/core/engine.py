@@ -259,6 +259,136 @@ class Engine:
         )
         return {"state": "committed", "oid": result.oid, "seq": result.seq}
 
+    def commit_many(
+        self,
+        items: list[tuple[RecordRef, dict[str, Any]]],
+        *,
+        message: str,
+        allow_secret: bool = False,
+    ) -> dict[str, Any]:
+        """Commit multiple full documents as one operator intent.
+
+        The current adapter contract is per-record atomic (`apply()`), so this method does
+        not pretend the whole batch is one database transaction. It does, however, preflight
+        every target before writing anything. Existing drift, missing records, duplicate
+        targets, and secret-policy failures block the entire batch up front.
+        """
+        self._authorize("commit")
+        self._ensure_atomic("commit")
+        message = _require_message(message)
+        if not items:
+            raise ValueError("bulk commit needs at least one item")
+
+        seen: set[tuple[str, str]] = set()
+        plans: list[dict[str, Any]] = []
+        blocked: list[dict[str, Any]] = []
+        total = len(items)
+        for index, (ref, doc) in enumerate(items, start=1):
+            key = (ref.collection, ref.record_id)
+            if key in seen:
+                raise ValueError(f"duplicate record in bulk commit: {ref.collection}:{ref.record_id}")
+            seen.add(key)
+            plan = self._commit_plan(
+                ref,
+                doc,
+                message=message,
+                allow_secret=allow_secret,
+                bulk_index=index,
+                bulk_count=total,
+            )
+            if plan["state"] in {"missing", "changed_outside_cfgit"}:
+                blocked.append(_plan_result(plan))
+            else:
+                plans.append(plan)
+
+        if blocked:
+            return {"state": "blocked", "results": [], "failed": blocked}
+
+        results: list[dict[str, Any]] = []
+        for offset, plan in enumerate(plans):
+            if plan["state"] == "noop":
+                results.append(_plan_result(plan))
+                continue
+            try:
+                result = self.adapter.apply(
+                    collection=plan["ref"].collection,
+                    record_id=plan["ref"].record_id,
+                    new_doc=plan["doc"],
+                    entry=plan["entry"],
+                    expected_head_oid=plan["expected_head"],
+                    expected_live_oid=plan["expected_live"],
+                    make_head=True,
+                )
+            except Exception as exc:
+                failed = [
+                    {
+                        "collection": plan["ref"].collection,
+                        "record_id": plan["ref"].record_id,
+                        "state": "failed",
+                        "error": str(exc),
+                        "error_type": exc.__class__.__name__,
+                    }
+                ]
+                pending = [_plan_result(p) for p in plans[offset + 1:]]
+                return {
+                    "state": "partial",
+                    "results": results,
+                    "failed": failed,
+                    "pending": pending,
+                }
+            results.append(
+                {
+                    "collection": result.collection,
+                    "record_id": result.record_id,
+                    "state": "committed",
+                    "seq": result.seq,
+                    "oid": result.oid,
+                }
+            )
+
+        state = "noop" if all(item["state"] == "noop" for item in results) else "committed"
+        return {"state": state, "results": results}
+
+    def _commit_plan(
+        self,
+        ref: RecordRef,
+        doc: dict[str, Any],
+        *,
+        message: str,
+        allow_secret: bool,
+        bulk_index: int | None = None,
+        bulk_count: int | None = None,
+    ) -> dict[str, Any]:
+        coll = self.config.collection(ref.collection)
+        live = self.adapter.get_record(ref.collection, ref.record_id)
+        if live is None:
+            return {"ref": ref, "state": "missing"}
+        head = self.adapter.get_head(ref.collection, ref.record_id)
+        expected_head = head.get("oid") if head else None
+        expected_live = hash_doc(live, coll)
+        if head and expected_live != expected_head:
+            return {
+                "ref": ref,
+                "state": "changed_outside_cfgit",
+                "live_oid": expected_live,
+                "head_oid": expected_head,
+            }
+        new_oid = hash_doc(doc, coll)
+        if head and new_oid == expected_head:
+            return {"ref": ref, "state": "noop", "oid": new_oid, "seq": head.get("seq")}
+        meta = self._secret_meta(doc, coll, allow_secret=allow_secret, message=message)
+        if bulk_index is not None and bulk_count is not None:
+            meta = {**meta, "bulk_commit": {"index": bulk_index, "count": bulk_count}}
+        entry = self._entry(ref, doc, coll, message=message, op="commit", parent_oid=expected_head, meta=meta)
+        return {
+            "ref": ref,
+            "doc": doc,
+            "entry": entry,
+            "expected_head": expected_head,
+            "expected_live": expected_live,
+            "state": "ready",
+        }
+
     def restore(self, ref: RecordRef, target_ref: str, *, message: str) -> dict[str, Any]:
         self._authorize("restore")
         self._ensure_atomic("restore")
@@ -694,6 +824,15 @@ def _secret_container(path: str, field_patterns: tuple[str, ...]) -> str:
         if any(fnmatch.fnmatchcase(base, pat) for pat in field_patterns):
             return ".".join(segments[: i + 1])
     return path
+
+
+def _plan_result(plan: dict[str, Any]) -> dict[str, Any]:
+    ref = plan["ref"]
+    result = {"collection": ref.collection, "record_id": ref.record_id, "state": plan["state"]}
+    for key in ("oid", "seq", "live_oid", "head_oid"):
+        if key in plan:
+            result[key] = plan[key]
+    return result
 
 
 def _walk_doc(value: Any, prefix: str = "") -> list[tuple[str, Any]]:

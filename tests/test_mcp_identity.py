@@ -25,3 +25,29 @@ def test_mcp_identity_hash_rejects_display_length_strings() -> None:
     assert result["status"] == "error"
     assert result["code"] == 1
     assert "at least" in result["message"]
+
+
+def test_mcp_bulk_commit_forwards_batch_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cfg.mcp import server
+
+    captured = {}
+
+    def fake_call(name, payload, **kwargs):
+        captured.update({"name": name, "payload": payload, "kwargs": kwargs})
+        return {"status": "ok", "code": 0, "message": "", "data": {}}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+
+    result = server.cfg_bulk_commit(
+        [{"record": "demo:alpha", "doc": {"id": "alpha", "value": 2}}],
+        message="bulk tune",
+        config_file=".cfg.toml",
+        env="dev",
+        author="dev@example.com",
+    )
+
+    assert result["status"] == "ok"
+    assert captured["name"] == "bulk_commit"
+    assert captured["payload"]["message"] == "bulk tune"
+    assert captured["payload"]["items"][0]["record"] == "demo:alpha"
+    assert captured["kwargs"]["author"] == "dev@example.com"

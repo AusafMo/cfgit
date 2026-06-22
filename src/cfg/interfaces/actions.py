@@ -150,6 +150,17 @@ def commit(
     return result, code
 
 
+def bulk_commit(
+    engine: Engine,
+    items: Any,
+    *,
+    message: str,
+    allow_secret: bool = False,
+) -> tuple[dict[str, Any], int]:
+    result = engine.commit_many(_bulk_commit_items(items), message=message, allow_secret=allow_secret)
+    return result, bulk_commit_exit_code(result)
+
+
 def log(engine: Engine, record: str, *, limit: int | None = 20) -> tuple[list[dict[str, Any]], int]:
     return engine.log(parse_record(record), limit=limit), EXIT_OK
 
@@ -280,11 +291,25 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             str(payload.get("b") or "=live"),
         )
     if name == "commit":
+        if payload.get("items") is not None:
+            return bulk_commit(
+                engine,
+                payload.get("items"),
+                message=str(payload.get("message") or "commit"),
+                allow_secret=bool(payload.get("allow_secret")),
+            )
         return commit(
             engine,
             _required(payload, "record"),
             _doc(payload.get("doc")),
             message=str(payload.get("message") or "commit"),
+            allow_secret=bool(payload.get("allow_secret")),
+        )
+    if name in {"bulk_commit", "commit_many"}:
+        return bulk_commit(
+            engine,
+            payload.get("items"),
+            message=str(payload.get("message") or "bulk commit"),
             allow_secret=bool(payload.get("allow_secret")),
         )
     if name == "log":
@@ -378,6 +403,10 @@ def parse_json_doc(value: str | dict[str, Any]) -> dict[str, Any]:
     return _doc(value)
 
 
+def parse_bulk_commit_items(value: Any) -> list[tuple[RecordRef, dict[str, Any]]]:
+    return _bulk_commit_items(value)
+
+
 def to_json(value: Any) -> Any:
     if is_dataclass(value):
         return to_json(asdict(value))
@@ -410,8 +439,45 @@ def restore_exit_code(result: dict[str, Any]) -> int:
     return EXIT_OK
 
 
+def bulk_commit_exit_code(result: dict[str, Any]) -> int:
+    if result.get("state") == "blocked":
+        return EXIT_DIRTY
+    if result.get("state") == "partial":
+        return EXIT_STORAGE
+    return EXIT_OK
+
+
 def resolve_author(explicit: str | None = None) -> str:
     return resolve_self_asserted_author(explicit)
+
+
+def _bulk_commit_items(value: Any) -> list[tuple[RecordRef, dict[str, Any]]]:
+    if value is None:
+        raise ValueError("bulk commit needs items")
+    if isinstance(value, str):
+        return _bulk_commit_items(json.loads(value))
+    if isinstance(value, dict):
+        if "items" in value:
+            return _bulk_commit_items(value["items"])
+        return [(parse_record(record), _doc(doc)) for record, doc in value.items()]
+    if not isinstance(value, list):
+        raise ValueError("bulk commit items must be a list, mapping, or JSON string")
+
+    out: list[tuple[RecordRef, dict[str, Any]]] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"bulk commit item {index} must be an object")
+        record = _blank_to_none(item.get("record"))
+        if record is None:
+            collection = _blank_to_none(item.get("collection"))
+            record_id = _blank_to_none(item.get("record_id") or item.get("id"))
+            if not collection or not record_id:
+                raise ValueError(f"bulk commit item {index} needs record or collection+record_id")
+            record = f"{collection}:{record_id}"
+        if "doc" not in item:
+            raise ValueError(f"bulk commit item {index} needs doc")
+        out.append((parse_record(record), _doc(item.get("doc"))))
+    return out
 
 
 def _doc(value: Any) -> dict[str, Any]:

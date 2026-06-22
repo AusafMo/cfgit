@@ -134,8 +134,13 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     p_commit = sub.add_parser("commit")
-    p_commit.add_argument("record")
-    p_commit.add_argument("--from", dest="from_file", required=True)
+    p_commit.add_argument("record", nargs="?")
+    p_commit.add_argument("--from", dest="from_file")
+    p_commit.add_argument(
+        "--bulk-from",
+        dest="bulk_from_file",
+        help="JSON file containing a list/map of record+doc items to commit as one batch intent",
+    )
     p_commit.add_argument("-m", "--message", required=True)
     p_commit.add_argument("--allow-secret", action="store_true")
 
@@ -247,6 +252,19 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         )
 
     if args.cmd == "commit":
+        if args.bulk_from_file:
+            if args.record or args.from_file:
+                raise ValueError("bulk commit uses --bulk-from without record or --from")
+            from cfg.interfaces.actions import bulk_commit_exit_code, parse_bulk_commit_items
+
+            result = engine.commit_many(
+                parse_bulk_commit_items(_load_json_any(args.bulk_from_file)),
+                message=args.message,
+                allow_secret=args.allow_secret,
+            )
+            return result, bulk_commit_exit_code(result)
+        if not args.record or not args.from_file:
+            raise ValueError("commit needs record and --from, or --bulk-from")
         doc = _load_json_file(args.from_file)
         result = engine.commit(
             _parse_record(args.record),
@@ -352,11 +370,15 @@ def _parse_record(raw: str | None) -> RecordRef:
 
 
 def _load_json_file(path: str) -> dict[str, Any]:
-    with Path(path).open("r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = _load_json_any(path)
     if not isinstance(data, dict):
         raise ValueError("--from file must contain one JSON object")
     return data
+
+
+def _load_json_any(path: str) -> Any:
+    with Path(path).open("r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def _parse_when(raw: str) -> datetime:
