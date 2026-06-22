@@ -186,6 +186,23 @@ Commit a full JSON document:
 cfg commit agent_configs:agent_planner --from planner.json -m "tune planner routing"
 ```
 
+Commit multiple records as one batch intent:
+
+```json
+[
+  {"record": "agent_configs:planner", "doc": {"config_id": "planner", "model": "fast"}},
+  {"record": "modelgarden_models:openai/gpt-4o-mini", "doc": {"model_path": "openai/gpt-4o-mini"}}
+]
+```
+
+```bash
+cfg commit --bulk-from batch.json -m "switch planner routing"
+```
+
+Bulk commit preflights the whole batch before writing. If any target has
+un-adopted drift, is missing, duplicates another target, or trips the secret
+policy, cfgit applies none of the batch.
+
 `commit`, `import`, and `adopt` scan the would-be-stored document for secret-like
 field names and values from `[secrets]`. Fields listed in `secret_fields` are
 stripped before history. Use `--allow-secret` only for intentional fixtures or
@@ -246,6 +263,7 @@ cfg status [record]
 cfg diff <record> [from] [to]
 cfg impact <record> [from] [to]
 cfg commit <record> --from <file.json> -m "message"
+cfg commit --bulk-from <batch.json> -m "message"
 cfg log <record>
 cfg show <record> <ref>
 cfg adopt <record> -m "message"
@@ -305,6 +323,7 @@ Tools include:
 - `cfg_diff`
 - `cfg_impact`
 - `cfg_commit`
+- `cfg_bulk_commit`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`

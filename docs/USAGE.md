@@ -92,6 +92,25 @@ cfgit commits full JSON documents. Write the intended document to a file, then:
 cfg commit agent_configs:agent_planner --from planner.json -m "adjust planner model"
 ```
 
+For a multi-record change, write a batch file:
+
+```json
+[
+  {"record": "agent_configs:planner", "doc": {"config_id": "planner", "model": "fast"}},
+  {"record": "modelgarden_models:openai/gpt-4o-mini", "doc": {"model_path": "openai/gpt-4o-mini"}}
+]
+```
+
+Then commit it:
+
+```bash
+cfg commit --bulk-from batch.json -m "switch planner routing"
+```
+
+Bulk commit preflights every target before writing. If any record has un-adopted
+drift, is missing, duplicates another target, or trips the secret policy, no
+record in the batch is applied.
+
 If the live record changed after cfgit last recorded it, commit returns
 `changed_outside_cfgit` and does not apply your document. Inspect the drift first:
 

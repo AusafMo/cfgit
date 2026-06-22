@@ -158,6 +158,100 @@ def test_empty_message_is_rejected_in_engine() -> None:
         engine.commit(RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}, message=" ")
 
 
+def test_bulk_commit_commits_multiple_records() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    alpha = {"id": "alpha", "value": 1}
+    beta = {"id": "beta", "value": 10}
+    row_a = _history_row(coll, alpha, seq=1, valid_from=t0)
+    row_b = _history_row(coll, beta, seq=1, valid_from=t0)
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): alpha, ("demo", "beta"): beta},
+        history=[row_a, row_b],
+        heads={("demo", "alpha"): row_a, ("demo", "beta"): row_b},
+    )
+
+    result = engine.commit_many(
+        [
+            (RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}),
+            (RecordRef("demo", "beta"), {"id": "beta", "value": 20}),
+        ],
+        message="bulk tune",
+    )
+
+    assert result["state"] == "committed"
+    assert [item["state"] for item in result["results"]] == ["committed", "committed"]
+    assert adapter.records[("demo", "alpha")]["value"] == 2
+    assert adapter.records[("demo", "beta")]["value"] == 20
+    assert adapter.history[-2]["meta"]["bulk_commit"] == {"index": 1, "count": 2}
+    assert adapter.history[-1]["meta"]["bulk_commit"] == {"index": 2, "count": 2}
+
+
+def test_bulk_commit_blocks_all_writes_when_any_record_has_drift() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    alpha_head = {"id": "alpha", "value": 1}
+    beta = {"id": "beta", "value": 10}
+    row_a = _history_row(coll, alpha_head, seq=1, valid_from=t0)
+    row_b = _history_row(coll, beta, seq=1, valid_from=t0)
+    engine, adapter = _engine(
+        collection=coll,
+        records={
+            ("demo", "alpha"): {"id": "alpha", "value": 999},
+            ("demo", "beta"): beta,
+        },
+        history=[row_a, row_b],
+        heads={("demo", "alpha"): row_a, ("demo", "beta"): row_b},
+    )
+
+    result = engine.commit_many(
+        [
+            (RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}),
+            (RecordRef("demo", "beta"), {"id": "beta", "value": 20}),
+        ],
+        message="bulk tune",
+    )
+
+    assert result["state"] == "blocked"
+    assert result["failed"][0]["state"] == "changed_outside_cfgit"
+    assert adapter.records[("demo", "beta")]["value"] == 10
+    assert len(adapter.history) == 2
+
+
+def test_bulk_commit_secret_block_prevents_all_writes() -> None:
+    engine, adapter = _engine(
+        records={("demo", "alpha"): {"id": "alpha", "value": 1}},
+        secrets=SecretsConfig(block_fields=("*api_key*",)),
+    )
+
+    with pytest.raises(SecretBlocked):
+        engine.commit_many(
+            [(RecordRef("demo", "alpha"), {"id": "alpha", "api_key": "plain"})],
+            message="bulk leaked key",
+        )
+
+    assert adapter.history == []
+
+
+def test_bulk_commit_parser_accepts_list_and_mapping_shapes() -> None:
+    from cfg.interfaces.actions import parse_bulk_commit_items
+
+    listed = parse_bulk_commit_items(
+        '[{"record":"demo:alpha","doc":{"id":"alpha","value":2}},'
+        '{"collection":"demo","record_id":"beta","doc":{"id":"beta","value":3}}]'
+    )
+    mapped = parse_bulk_commit_items({"demo:gamma": {"id": "gamma", "value": 4}})
+
+    assert [(ref.collection, ref.record_id, doc["value"]) for ref, doc in listed] == [
+        ("demo", "alpha", 2),
+        ("demo", "beta", 3),
+    ]
+    assert [(ref.collection, ref.record_id, doc["value"]) for ref, doc in mapped] == [
+        ("demo", "gamma", 4)
+    ]
+
+
 class FakeAdapter:
     def __init__(
         self,
