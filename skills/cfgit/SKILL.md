@@ -17,6 +17,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Before the FIRST `cfg import` against a new database or `.cfg.toml`, run `cfg doctor` (read-only). It reports every secret-deny match, oversized field, and key issue at once, with paste-ready `secret_fields`/`ignore_fields` snippets. Fix `.cfg.toml` from its output, then import. This avoids import failing one secret at a time.
 - In `authenticated` or `enforced` identity mode, the process must already have a verified identity source, usually `CFGIT_IDENTITY_TOKEN` or a per-user DB principal. `--author` and MCP `author` are hints only; cfgit rejects them if they do not match the verified identity.
 - Never paste raw human identity tokens into prompts, logs, commits, or history. For real setup secrets, prefer local CLI hashing: `printf '%s' '<private-token>' | cfg identity-hash --stdin`.
+- If `cfg log`, `cfg show`, or the MCP envelope returns `bad_config` saying history exists under another env, stop and switch to the env name that wrote that history or fix `.cfg.toml`; do not treat an empty history rail as proof that the record was never committed.
 
 ## Workflow
 
@@ -33,6 +34,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - `cfg log <record> --json`
    - `cfg impact <record> =HEAD =live --json`
    - Scoped LLM review, when explicitly needed: `cfg impact <record> =HEAD =live --against <related-record> --llm --json`
+   - If history lookup reports an env mismatch, re-run against the stamped env before making changes.
 
 3. Mutate through cfgit.
    - Write the full target document to a temp JSON file.
@@ -73,3 +75,4 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 
 Every MCP tool returns the same envelope shape as the CLI exit status: `status`, `code`, `message`, `data`.
 For MCP bulk commits, pass `items` as structured JSON (`[{record, doc}]`) when the client supports it; use a JSON string only when the client cannot send nested objects cleanly.
+For MCP history/env mismatches, branch on `status="error"` and `code=6`; surface the `message` to the user and do not continue mutation.

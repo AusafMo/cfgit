@@ -16,10 +16,12 @@ from cfg.adapters.base import (
     AmbiguousConfig,
     ApplyResult,
     AtomicityReport,
+    HistoryEnvMismatch,
     NoSuchConfig,
     ReconcileReport,
     StaleHead,
     StaleLive,
+    history_env_mismatch_message,
 )
 from cfg.core.config import ProjectConfig
 from cfg.core.hashing import hash_doc
@@ -128,33 +130,34 @@ class PostgresAdapter:
     ) -> list[dict]:
         clauses = ["env = %s"]
         params: list[Any] = [self.env_name]
+        envless_clauses: list[str] = []
+        envless_params: list[Any] = []
+
+        def add_clause(clause: str, *values: Any) -> None:
+            clauses.append(clause)
+            params.extend(values)
+            envless_clauses.append(clause)
+            envless_params.extend(values)
+
         if collection is not None:
-            clauses.append("collection_name = %s")
-            params.append(collection)
+            add_clause("collection_name = %s", collection)
         if record_id is not None:
-            clauses.append("record_id = %s")
-            params.append(record_id)
+            add_clause("record_id = %s", record_id)
         if tag is not None:
-            clauses.append("%s = ANY(tags)")
-            params.append(tag)
+            add_clause("%s = ANY(tags)", tag)
         if git_sha is not None:
-            clauses.append("%s = ANY(git_shas)")
-            params.append(git_sha)
+            add_clause("%s = ANY(git_shas)", git_sha)
         if as_of_recorded is not None:
-            clauses.append("recorded_at <= %s")
-            params.append(as_of_recorded)
+            add_clause("recorded_at <= %s", as_of_recorded)
         if as_of_valid is not None:
-            clauses.append("valid_from <= %s")
-            clauses.append("(valid_to IS NULL OR valid_to > %s)")
-            params.extend([as_of_valid, as_of_valid])
+            add_clause("valid_from <= %s", as_of_valid)
+            add_clause("(valid_to IS NULL OR valid_to > %s)", as_of_valid)
         if ref is not None:
             if ref.startswith("@"):
-                clauses.append("seq = %s")
-                params.append(int(ref[1:]))
+                add_clause("seq = %s", int(ref[1:]))
             else:
                 oid = ref.removeprefix("sha256:").removeprefix("#")
-                clauses.append("oid LIKE %s")
-                params.append(f"{oid}%")
+                add_clause("oid LIKE %s", f"{oid}%")
 
         direction = "DESC" if order == "desc" else "ASC"
         sql = (
@@ -168,7 +171,15 @@ class PostgresAdapter:
         with self.conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
-        return [_history_row(row, with_doc=with_doc) for row in rows]
+        result = [_history_row(row, with_doc=with_doc) for row in rows]
+        if not result and limit != 0 and collection is not None and record_id is not None:
+            self._raise_env_mismatch_if_history_exists(
+                collection,
+                record_id,
+                envless_clauses=envless_clauses,
+                envless_params=envless_params,
+            )
+        return result
 
     def list_tags(self) -> list[dict]:
         with self.conn.cursor() as cur:
@@ -551,6 +562,47 @@ class PostgresAdapter:
             cur.execute("SELECT inet_server_addr()::text AS addr, inet_server_port() AS port")
             row = cur.fetchone()
         return f"{row['addr']}:{row['port']}"
+
+    def _raise_env_mismatch_if_history_exists(
+        self,
+        collection: str,
+        record_id: str,
+        *,
+        envless_clauses: list[str],
+        envless_params: list[Any],
+    ) -> None:
+        envs: set[str] = set()
+        where = " AND ".join(envless_clauses)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT env FROM {self.history_table} WHERE {where}",
+                envless_params,
+            )
+            envs.update(str(row["env"]) for row in cur.fetchall() if row.get("env"))
+            if envs and self.env_name in envs:
+                return
+            if envless_clauses == ["collection_name = %s", "record_id = %s"]:
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT env
+                    FROM {self.heads_table}
+                    WHERE collection_name = %s AND record_id = %s
+                    """,
+                    [collection, record_id],
+                )
+                envs.update(str(row["env"]) for row in cur.fetchall() if row.get("env"))
+                if self.env_name in envs:
+                    return
+        other_envs = sorted(env for env in envs if env != self.env_name)
+        if other_envs:
+            raise HistoryEnvMismatch(
+                history_env_mismatch_message(
+                    collection=collection,
+                    record_id=record_id,
+                    current_env=self.env_name,
+                    other_envs=other_envs,
+                )
+            )
 
 
 def _history_row(row: dict[str, Any], *, with_doc: bool = True) -> dict[str, Any]:

@@ -4,6 +4,7 @@ from cfg.adapters.base import (
     AmbiguousConfig,
     ApplyResult,
     AtomicityReport,
+    HistoryEnvMismatch,
     NoSuchConfig,
     ReconcileReport,
     StaleHead,
@@ -19,5 +20,6 @@ __all__ = [
     "StaleHead",
     "StaleLive",
     "AmbiguousConfig",
+    "HistoryEnvMismatch",
     "NoSuchConfig",
 ]

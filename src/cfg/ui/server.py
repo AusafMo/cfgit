@@ -164,8 +164,16 @@ def run_ui(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
+    allow_port_fallback: bool = True,
 ) -> int:
-    server = _bind_server(host=host, port=port, config_file=config_file, env=env, author=author)
+    server = _bind_server(
+        host=host,
+        port=port,
+        config_file=config_file,
+        env=env,
+        author=author,
+        allow_port_fallback=allow_port_fallback,
+    )
     actual_host, actual_port = server.server_address
     url = f"http://{actual_host}:{actual_port}/"
     print(f"cfg ui listening on {url}", flush=True)
@@ -187,9 +195,11 @@ def _bind_server(
     config_file: str | None,
     env: str,
     author: str | None,
+    allow_port_fallback: bool = True,
 ) -> CfgUIServer:
     last_error: OSError | None = None
-    for candidate in range(port, port + 50):
+    candidates = range(port, port + 50) if allow_port_fallback else range(port, port + 1)
+    for candidate in candidates:
         try:
             return CfgUIServer(
                 (host, candidate),
@@ -201,6 +211,8 @@ def _bind_server(
             last_error = exc
             if exc.errno not in {48, 98, 10048}:
                 raise
+            if not allow_port_fallback:
+                raise OSError(f"could not bind {host}:{port}; port is already in use") from exc
     raise OSError(f"could not bind {host}:{port}-{port + 49}") from last_error
 
 
