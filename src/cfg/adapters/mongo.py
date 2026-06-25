@@ -48,6 +48,7 @@ class MongoAdapter:
         self.history_db = self.history_client[self.history_db_name]
         self.history = self.history_db[project.history.history_collection]
         self.heads = self.history_db[project.history.heads_collection]
+        self.refs = self.history_db[project.branches.refs_collection]
 
     def get_record(self, collection: str, record_id: str) -> dict | None:
         docs = list(self.db[collection].find(self._runtime_query(collection, record_id)).limit(2))
@@ -135,6 +136,30 @@ class MongoAdapter:
             {"$sort": {"_id": 1}},
         ]
         return [{"tag": row["_id"], "count": row["count"]} for row in self.history.aggregate(pipeline)]
+
+    def put_ref(self, doc: dict) -> None:
+        stored = deepcopy(doc)
+        stored["env"] = self.env_name
+        ref_type = str(stored["type"])
+        ref_id = str(stored["id"])
+        self.refs.replace_one(
+            {"env": self.env_name, "type": ref_type, "id": ref_id},
+            stored,
+            upsert=True,
+        )
+
+    def get_ref(self, ref_type: str, ref_id: str) -> dict | None:
+        row = self.refs.find_one({"env": self.env_name, "type": ref_type, "id": ref_id})
+        return _ref_row(row) if row else None
+
+    def list_refs(self, ref_type: str, **filters) -> list[dict]:
+        query: dict[str, Any] = {"env": self.env_name, "type": ref_type}
+        query.update({key: value for key, value in filters.items() if value is not None})
+        cursor = self.refs.find(query).sort([("created_at", ASCENDING), ("id", ASCENDING)])
+        return [_ref_row(row) for row in cursor]
+
+    def delete_ref(self, ref_type: str, ref_id: str) -> None:
+        self.refs.delete_one({"env": self.env_name, "type": ref_type, "id": ref_id})
 
     def apply(
         self,
@@ -299,6 +324,13 @@ class MongoAdapter:
             [("env", ASCENDING), ("collection", ASCENDING), ("record_id", ASCENDING)],
             unique=True,
         )
+        if self.project.branches.enabled:
+            self.refs.create_index(
+                [("env", ASCENDING), ("type", ASCENDING), ("id", ASCENDING)],
+                unique=True,
+            )
+            self.refs.create_index([("env", ASCENDING), ("type", ASCENDING), ("branch", ASCENDING), ("created_at", ASCENDING)])
+            self.refs.create_index([("env", ASCENDING), ("type", ASCENDING), ("status", ASCENDING), ("updated_at", ASCENDING)])
 
     def check_runtime_invariant(self, collection: str | None = None) -> list[str]:
         names = [collection] if collection else [c.name for c in self.project.collections]
@@ -491,6 +523,10 @@ class MongoAdapter:
 
 def _history_row(row: dict[str, Any], *, with_doc: bool) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key != "_id" and (with_doc or key != "doc")}
+
+
+def _ref_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in row.items() if key != "_id"}
 
 
 def _other_env_names(*env_lists: Any, current: str) -> list[str]:
