@@ -15,7 +15,7 @@ from cfg.adapters.base import AtomicityUnavailable, AmbiguousConfig, NoSuchConfi
 from cfg.core.authz import PermissionDenied, permission_role
 from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
-from cfg.core.engine import Engine, RecordRef, SecretBlocked
+from cfg.core.engine import BranchingDisabled, Engine, RecordRef, SecretBlocked
 from cfg.core.identity import IdentityError, hash_token, resolve_identity
 
 
@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     except NoSuchConfig as exc:
         _emit_error("not_found", str(exc), args)
         return EXIT_NOT_FOUND
-    except (SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
+    except (BranchingDisabled, SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
         _emit_error("error", str(exc), args)
         return EXIT_ARG
     except Exception as exc:  # pragma: no cover - final CLI guard
@@ -95,11 +95,41 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-file", default=None)
     parser.add_argument("--env", default="dev")
     parser.add_argument("--author", default=None)
+    parser.add_argument("--branch", default=None)
     parser.add_argument("--json", action="store_true")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init")
     sub.add_parser("whoami")
+
+    p_branch = sub.add_parser("branch")
+    branch_sub = p_branch.add_subparsers(dest="branch_cmd", required=True)
+    branch_sub.add_parser("list")
+    p_branch_create = branch_sub.add_parser("create")
+    p_branch_create.add_argument("name")
+    p_branch_create.add_argument("--from", dest="from_branch", default="main")
+    p_branch_create.add_argument("-m", "--message", default=None)
+    p_branch_delete = branch_sub.add_parser("delete")
+    p_branch_delete.add_argument("name")
+
+    p_switch = sub.add_parser("switch")
+    p_switch.add_argument("name")
+
+    p_pr = sub.add_parser("pr")
+    pr_sub = p_pr.add_subparsers(dest="pr_cmd", required=True)
+    p_pr_create = pr_sub.add_parser("create")
+    p_pr_create.add_argument("--base", default="main")
+    p_pr_create.add_argument("--head", required=True)
+    p_pr_create.add_argument("-m", "--message", required=True)
+    p_pr_list = pr_sub.add_parser("list")
+    p_pr_list.add_argument("--status", default=None)
+    p_pr_show = pr_sub.add_parser("show")
+    p_pr_show.add_argument("id")
+    p_pr_close = pr_sub.add_parser("close")
+    p_pr_close.add_argument("id")
+    p_pr_merge = pr_sub.add_parser("merge")
+    p_pr_merge.add_argument("id")
+    p_pr_merge.add_argument("-m", "--message", default=None)
 
     p_import = sub.add_parser("import")
     p_import.add_argument("record", nargs="?")
@@ -147,7 +177,7 @@ def _parser() -> argparse.ArgumentParser:
     p_commit.add_argument("--allow-secret", action="store_true")
 
     p_log = sub.add_parser("log")
-    p_log.add_argument("record")
+    p_log.add_argument("record", nargs="?")
     p_log.add_argument("-n", "--limit", type=int, default=20)
 
     p_show = sub.add_parser("show")
@@ -207,6 +237,33 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
             "identity_mode": env.identity.mode,
         }, EXIT_OK
 
+    if args.cmd == "branch":
+        if args.branch_cmd == "list":
+            return engine.branch_list(), EXIT_OK
+        if args.branch_cmd == "create":
+            return engine.branch_create(args.name, from_branch=args.from_branch, message=args.message), EXIT_OK
+        if args.branch_cmd == "delete":
+            return engine.branch_delete(args.name), EXIT_OK
+        raise ValueError(f"unknown branch command: {args.branch_cmd}")
+
+    if args.cmd == "switch":
+        result = engine.branch_current(args.name)
+        _write_state(engine.config, engine.env, result["branch"])
+        return {**result, "state": "switched"}, EXIT_OK
+
+    if args.cmd == "pr":
+        if args.pr_cmd == "create":
+            return engine.pr_create(base=args.base, head=args.head, message=args.message), EXIT_OK
+        if args.pr_cmd == "list":
+            return engine.pr_list(status=args.status), EXIT_OK
+        if args.pr_cmd == "show":
+            return engine.pr_show(args.id), EXIT_OK
+        if args.pr_cmd == "close":
+            return engine.pr_close(args.id), EXIT_OK
+        if args.pr_cmd == "merge":
+            return engine.pr_merge(args.id, message=args.message), EXIT_OK
+        raise ValueError(f"unknown PR command: {args.pr_cmd}")
+
     if args.cmd == "import":
         if not args.all and not args.record:
             raise ValueError("import needs --all or a record")
@@ -232,6 +289,8 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         return report, code
 
     if args.cmd == "diff":
+        if ".." in args.record and ":" not in args.record:
+            return engine.branch_diff(args.record), EXIT_OK
         changes = engine.diff(_parse_record(args.record), args.a, args.b)
         return {"changes": changes, "text": format_diff(changes)}, EXIT_OK
 
@@ -258,30 +317,56 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         )
 
     if args.cmd == "commit":
+        branch = _active_branch(engine.config, engine.env, args)
         if args.bulk_from_file:
             if args.record or args.from_file:
                 raise ValueError("bulk commit uses --bulk-from without record or --from")
             from cfg.interfaces.actions import bulk_commit_exit_code, parse_bulk_commit_items
 
-            result = engine.commit_many(
-                parse_bulk_commit_items(_load_json_any(args.bulk_from_file)),
-                message=args.message,
-                allow_secret=args.allow_secret,
-            )
+            items = parse_bulk_commit_items(_load_json_any(args.bulk_from_file))
+            if branch != engine.config.branches.default_branch:
+                result = engine.branch_commit_many(
+                    branch,
+                    items,
+                    message=args.message,
+                    allow_secret=args.allow_secret,
+                )
+            else:
+                result = engine.commit_many(
+                    items,
+                    message=args.message,
+                    allow_secret=args.allow_secret,
+                )
             return result, bulk_commit_exit_code(result)
         if not args.record or not args.from_file:
             raise ValueError("commit needs record and --from, or --bulk-from")
         doc = _load_json_file(args.from_file)
-        result = engine.commit(
-            _parse_record(args.record),
-            doc,
-            message=args.message,
-            allow_secret=args.allow_secret,
-        )
+        if branch != engine.config.branches.default_branch:
+            result = engine.branch_commit(
+                branch,
+                _parse_record(args.record),
+                doc,
+                message=args.message,
+                allow_secret=args.allow_secret,
+            )
+        else:
+            result = engine.commit(
+                _parse_record(args.record),
+                doc,
+                message=args.message,
+                allow_secret=args.allow_secret,
+            )
         code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
         return result, code
 
     if args.cmd == "log":
+        branch = _active_branch(engine.config, engine.env, args)
+        if branch != engine.config.branches.default_branch:
+            if args.record:
+                raise ValueError("branch log does not take a record in v1")
+            return engine.branch_log(branch, limit=args.limit), EXIT_OK
+        if not args.record:
+            raise ValueError("log needs a record on main, or switch/select a branch")
         return engine.log(_parse_record(args.record), limit=args.limit), EXIT_OK
 
     if args.cmd == "show":
@@ -364,6 +449,38 @@ def _engine(project: ProjectConfig, env_name: str, *, author: str | None) -> Eng
 
     identity = resolve_identity(env, adapter, explicit_author=author)
     return Engine(project, adapter, env=env_name, identity=identity)
+
+
+def _active_branch(project: ProjectConfig, env: str, args: argparse.Namespace) -> str:
+    if args.branch:
+        return str(args.branch)
+    if not project.branches.enabled:
+        return project.branches.default_branch
+    state = _read_state(project)
+    if state.get("env") == env and state.get("branch"):
+        return str(state["branch"])
+    return project.branches.default_branch
+
+
+def _state_path(project: ProjectConfig) -> Path:
+    return project.path.parent / ".cfgit" / "state.json"
+
+
+def _read_state(project: ProjectConfig) -> dict[str, Any]:
+    path = _state_path(project)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_state(project: ProjectConfig, env: str, branch: str) -> None:
+    path = _state_path(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"env": env, "branch": branch}, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _parse_record(raw: str | None) -> RecordRef:
@@ -509,6 +626,7 @@ def _plain_init(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "atomic": asdict(atomic) if is_dataclass(atomic) else atomic,
         "invariant_violations": result["invariant_violations"],
+        "branches": result.get("branches"),
     }
 
 

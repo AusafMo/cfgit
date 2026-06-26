@@ -12,6 +12,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Never write through a raw database client when a `cfg` operation can do the mutation.
 - Never use cross-project Mongo URIs for writes. Remote managed Mongo writes are forbidden unless the user explicitly grants a per-turn exception and asks for that exact target.
 - Treat `changed_outside_cfgit` as the central state. Do not commit over it. Run `cfg diff`, explain what changed, then `cfg adopt` if the user wants to fold that live state into history.
+- If `[branches] enabled = true`, draft risky changes on a non-main branch and open a cfgit PR. Branch commits and PR creation do not mutate runtime; `cfg pr merge` is the only branch command that does.
 - Prefer `--json` for agent parsing.
 - Use deterministic `cfg impact` first. Add `--llm` only when the user asks for LLM narration and the impact plugin is installed. Use `--against <collection:id>` when the user wants narration scoped to specific related records instead of the whole system.
 - Before the FIRST `cfg import` against a new database or `.cfg.toml`, run `cfg doctor` (read-only). It reports every secret-deny match, oversized field, and key issue at once, with paste-ready `secret_fields`/`ignore_fields` snippets. Fix `.cfg.toml` from its output, then import. This avoids import failing one secret at a time.
@@ -40,6 +41,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - Write the full target document to a temp JSON file.
    - Run `cfg commit <record> --from <file> -m "<message>" --json`.
    - For a coupled multi-record change, write a batch JSON file and run `cfg commit --bulk-from <file> -m "<message>" --json`. The batch file can be `[{"record":"collection:id","doc":{...}}]` or `{"collection:id": {...}}`.
+   - For a draft branch, use `cfg --branch <branch> commit <record> --from <file> -m "<message>" --json` or `cfg --branch <branch> commit --bulk-from <file> -m "<message>" --json`. This writes cfgit refs only; runtime is unchanged.
    - If commit returns `changed_outside_cfgit`, stop and inspect drift.
    - If bulk commit returns `blocked`, no record was applied; inspect `failed`. If it returns `partial`, some records were applied before a race/failure; inspect `results`, `failed`, and `pending` before continuing.
    - If the result is `identity_required` or `forbidden`, do not retry with another author's string. Ask the user to provide the correct token/DB principal or change permissions.
@@ -53,6 +55,14 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - System preview: `cfg restore --as-of YYYY-MM-DD --dry-run -m "<message>" --json`
    - System apply only when the author is allowed: `cfg restore --as-of YYYY-MM-DD -m "<message>" --json`
 
+6. Branch / PR flow when enabled.
+   - `cfg branch list --json`
+   - `cfg branch create <name> --from main --json`
+   - `cfg --branch <name> commit <record> --from <file> -m "<message>" --json`
+   - `cfg diff main..<name> --json`
+   - `cfg pr create --base main --head <name> -m "<message>" --json`
+   - `cfg pr merge <pr-id> --json` only after review. If merge returns `stale` or `changed_outside_cfgit`, do not retry blindly; inspect current main/live drift first.
+
 ## MCP Tools
 
 If the cfgit MCP server is available, prefer its tools over shelling out:
@@ -63,6 +73,16 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_impact`
 - `cfg_commit`
 - `cfg_bulk_commit`
+- `cfg_branch_list`
+- `cfg_branch_create`
+- `cfg_branch_delete`
+- `cfg_branch_diff`
+- `cfg_branch_log`
+- `cfg_pr_create`
+- `cfg_pr_list`
+- `cfg_pr_show`
+- `cfg_pr_close`
+- `cfg_pr_merge`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`

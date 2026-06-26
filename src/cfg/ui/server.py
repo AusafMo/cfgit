@@ -117,6 +117,14 @@ class CfgUIHandler(BaseHTTPRequestHandler):
         engine = actions.make_engine(ctx)
         who, _ = actions.whoami(engine)
         rows, code = actions.status(engine)
+        branches: list[dict[str, Any]] = []
+        prs: list[dict[str, Any]] = []
+        try:
+            branches, _ = actions.branch_list(engine)
+            prs, _ = actions.pr_list(engine, status="open")
+        except Exception:
+            branches = []
+            prs = []
         return {
             "status": "dirty" if code == actions.EXIT_DIRTY else "ok",
             "code": code,
@@ -124,6 +132,8 @@ class CfgUIHandler(BaseHTTPRequestHandler):
             "data": {
                 "whoami": actions.to_json(who),
                 "status": actions.to_json(rows),
+                "branches": actions.to_json(branches),
+                "prs": actions.to_json(prs),
             },
         }
 
@@ -309,6 +319,7 @@ UI_HTML = r"""<!doctype html>
     .seg button.on{background:var(--raise);color:var(--ink)}
     .envpick{background:var(--panel);border:1px solid var(--edge2);border-radius:8px;color:var(--ink);
       padding:6px 9px;font-size:12.5px;font-family:var(--mono)}
+    .branchpick{max-width:170px}
     .ghost{background:transparent;border:1px solid var(--edge2);border-radius:8px;color:var(--dim);
       padding:6px 11px;font-size:12.5px;cursor:pointer}
     .ghost:hover{color:var(--ink);border-color:var(--blue)}
@@ -525,7 +536,8 @@ UI_HTML = r"""<!doctype html>
     .modal .desc b{color:var(--ink);font-family:var(--mono);font-size:12.5px}
     .modal label{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);font-weight:600}
     .modal input{width:100%;background:var(--bg);border:1px solid var(--edge2);border-radius:8px;padding:9px 11px;font-family:var(--mono);font-size:12.5px}
-    .modal input:focus{outline:none;border-color:var(--blue)}
+    .modal textarea{width:100%;min-height:280px;resize:vertical;background:var(--bg);border:1px solid var(--edge2);border-radius:8px;padding:9px 11px;font-family:var(--mono);font-size:12px;color:var(--ink)}
+    .modal input:focus,.modal textarea:focus{outline:none;border-color:var(--blue)}
     .modal .f{display:flex;justify-content:flex-end;gap:9px;padding:14px 18px;border-top:1px solid var(--edge)}
 
     @media (max-width:1080px){ .cols{grid-template-columns:240px 280px 1fr} }
@@ -541,6 +553,12 @@ UI_HTML = r"""<!doctype html>
       <span class="chip open" id="mode"></span>
       <div class="sp"></div>
       <select class="envpick" id="env" title="environment"><option>dev</option></select>
+      <select class="envpick branchpick" id="branch" title="branch"><option>main</option></select>
+      <button class="ghost" id="newBranch" type="button">Branch</button>
+      <button class="ghost" id="draftCommit" type="button">Draft</button>
+      <button class="ghost" id="branchDiff" type="button">Diff</button>
+      <button class="ghost" id="openPr" type="button">PR</button>
+      <button class="ghost" id="mergePr" type="button">Merge</button>
       <div class="seg" id="theme"><button data-th="dark" class="on">Dark</button><button data-th="light">Light</button></div>
       <button class="ghost" id="refresh" type="button">Refresh</button>
       <input id="configFile" style="display:none">
@@ -568,7 +586,7 @@ UI_HTML = r"""<!doctype html>
   <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
 
 <script>
-const S={records:[],filter:"all",q:"",sel:null,against:new Set(),hist:[],who:null,open:{}};
+const S={records:[],branches:[],prs:[],filter:"all",q:"",sel:null,against:new Set(),hist:[],who:null,open:{}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 // inline markdown for LLM narration: escape first (XSS-safe), then render the small
@@ -582,7 +600,7 @@ const fmt=v=>typeof v==="object"?JSON.stringify(v):String(v);
 const dcls=s=>s==="clean"?"clean":s==="new"?"new":"drift";
 const isDrift=s=>s!=="clean"&&s!=="new";
 
-function env(){return{env:$("env").value||"dev",config_file:$("configFile").value||null};}
+function env(){return{env:$("env").value||"dev",branch:$("branch").value||"main",config_file:$("configFile").value||null};}
 function qs(){const p=new URLSearchParams(),e=env();if(e.env)p.set("env",e.env);if(e.config_file)p.set("config_file",e.config_file);return p.toString();}
 async function api(action,data){const r=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...env(),...data})});return r.json();}
 function toast(msg,bad){const t=$("toast");t.innerHTML=`<span class="${bad?"bad":"ok"}">${bad?"✕":"✓"}</span>${esc(msg)}`;t.className="toast show"+(bad?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",2400);}
@@ -606,11 +624,27 @@ async function loadState(){
   if(sc&&sc.data&&Array.isArray(sc.data.envs)&&sc.data.envs.length){
     const cur=$("env").value; $("env").innerHTML=sc.data.envs.map(e=>`<option ${e===cur?"selected":""}>${esc(e)}</option>`).join("");}
   S.records=(st.data&&st.data.status)?st.data.status:[];
+  S.branches=(st.data&&st.data.branches)?st.data.branches:[];
+  S.prs=(st.data&&st.data.prs)?st.data.prs:[];
+  renderBranches();
   // default: open every collection that has drift, else open first
   const colls=[...new Set(S.records.map(r=>r.collection))];
   if(Object.keys(S.open).length===0){colls.forEach(c=>{S.open[c]=S.records.some(r=>r.collection===c&&isDrift(r.state));});
     if(!Object.values(S.open).some(Boolean)&&colls[0])S.open[colls[0]]=true;}
   renderFilters();renderTree();
+}
+
+function renderBranches(){
+  const sel=$("branch"); if(!sel)return;
+  const current=sel.value||"main";
+  const names=(S.branches.length?S.branches.map(b=>b.name):["main"]);
+  sel.innerHTML=names.map(n=>`<option ${n===current?"selected":""}>${esc(n)}</option>`).join("");
+  if(names.includes(current))sel.value=current; else sel.value=names[0]||"main";
+  const onMain=sel.value==="main";
+  $("draftCommit").disabled=onMain||!S.sel;
+  $("branchDiff").disabled=onMain;
+  $("openPr").disabled=onMain;
+  $("mergePr").disabled=onMain||!S.prs.some(p=>p.head_branch===sel.value&&p.status==="open");
 }
 
 function counts(){const c={all:S.records.length,drift:0,clean:0,new:0};
@@ -684,7 +718,7 @@ function refreshImpactBtn(){
 }
 
 async function selectRecord(key){
-  S.sel=key;renderTree();
+  S.sel=key;renderBranches();renderTree();
   const rec=S.records.find(r=>r.collection+":"+r.record_id===key);
   $("hist").innerHTML=`<div class="spin">loading history…</div>`;
   $("diff").innerHTML=`<div class="spin">…</div>`;$("dActs").innerHTML="";$("dTitle").textContent="Diff";
@@ -949,6 +983,67 @@ function openRestore(rec,ref){modal(`<h3>Restore ${esc(ref)}</h3><div class="b">
   <div><label>Reason</label><input id="mMsg" value="restore ${esc(ref)}" autocomplete="off"></div></div>
   <div class="f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn warn" id="mGo">Restore</button></div>`);
   $("mGo").onclick=async()=>{$("mGo").disabled=true;const r=await api("restore",{record:S.sel,ref:ref,message:$("mMsg").value||("restore "+ref)});after(r,"Restored");};}
+function selectedBranch(){return $("branch").value||"main";}
+function openCreateBranch(){modal(`<h3>Create branch</h3><div class="b">
+  <div class="desc">Create a draft branch. This writes only cfgit branch metadata and does not mutate runtime.</div>
+  <div><label>Name</label><input id="mName" value="draft-${Date.now().toString(36)}" autocomplete="off"></div>
+  <div><label>Message</label><input id="mMsg" value="create draft branch" autocomplete="off"></div></div>
+  <div class="f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn go" id="mGo">Create</button></div>`);
+  $("mGo").onclick=async()=>{$("mGo").disabled=true;const r=await api("branch_create",{name:$("mName").value,from_branch:"main",message:$("mMsg").value});afterBranch(r,"Branch created");};}
+async function openDraftCommit(){
+  const br=selectedBranch();
+  if(br==="main"){toast("select a non-main branch",true);return;}
+  if(!S.sel){toast("select a record first",true);return;}
+  const live=await api("show",{record:S.sel,ref:"live"});
+  const doc=live&&live.data&&live.data.doc?live.data.doc:{};
+  modal(`<h3>Draft commit to ${esc(br)}</h3><div class="b">
+    <div class="desc">Edit the JSON for <b>${esc(S.sel)}</b>. This stores a branch commit only; runtime changes only after PR merge.</div>
+    <div><label>Message</label><input id="mMsg" value="draft ${esc(S.sel)}" autocomplete="off"></div>
+    <div><label>Document JSON</label><textarea id="mDoc" spellcheck="false">${esc(JSON.stringify(doc,null,2))}</textarea></div></div>
+    <div class="f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn go" id="mGo">Commit Draft</button></div>`);
+  $("mGo").onclick=async()=>{
+    $("mGo").disabled=true;
+    let doc;
+    try{doc=JSON.parse($("mDoc").value);}catch(e){toast("invalid JSON: "+e.message,true);$("mGo").disabled=false;return;}
+    const r=await api("commit",{record:S.sel,doc,branch:br,message:$("mMsg").value||"draft"});
+    afterBranch(r,"Draft committed");
+  };
+}
+async function showBranchDiff(){
+  const br=selectedBranch();
+  if(br==="main"){toast("select a non-main branch",true);return;}
+  const r=await api("branch_diff",{range:"main.."+br});
+  const rows=(r.data&&r.data.records)||[];
+  $("dTitle").innerHTML=`Branch diff · <b>main..${esc(br)}</b>`;
+  $("dActs").innerHTML="";
+  if(!rows.length){$("diff").innerHTML=`<div class="paper"><div class="nodiff">No draft changes on this branch.</div></div>`;return;}
+  $("diff").innerHTML=`<div class="paper doconly"><div class="paper-h"><div>branch draft changes</div></div><div class="docbody">${esc(JSON.stringify(rows,null,2))}</div></div>`;
+}
+function openPrModal(){
+  const br=selectedBranch();
+  if(br==="main"){toast("select a non-main branch",true);return;}
+  modal(`<h3>Open PR</h3><div class="b">
+      <div class="desc">Open a review object for <b>${esc(br)}</b>. Runtime is unchanged until merge.</div>
+    <div><label>Message</label><input id="mMsg" value="merge ${esc(br)}" autocomplete="off"></div></div>
+    <div class="f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn go" id="mGo">Open PR</button></div>`);
+  $("mGo").onclick=async()=>{$("mGo").disabled=true;const r=await api("pr_create",{base:"main",head:br,message:$("mMsg").value||("merge "+br)});afterBranch(r,"PR opened");};
+}
+function openMergeModal(){
+  const br=selectedBranch();
+  const prs=S.prs.filter(p=>p.head_branch===br&&p.status==="open");
+  if(!prs.length){toast("no open PR for this branch",true);return;}
+  modal(`<h3>Merge PR</h3><div class="b">
+    <div class="desc">This is the runtime mutation path. cfgit will refuse stale heads and out-of-band drift.</div>
+    <div><label>Open PR</label><select class="envpick" id="mPr">${prs.map(p=>`<option value="${esc(p.id)}">${esc(p.id)} · ${esc(p.message||"")}</option>`).join("")}</select></div>
+    <div><label>Message</label><input id="mMsg" value="merge ${esc(br)}" autocomplete="off"></div></div>
+    <div class="f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn warn" id="mGo">Merge</button></div>`);
+  $("mGo").onclick=async()=>{$("mGo").disabled=true;const r=await api("pr_merge",{id:$("mPr").value,message:$("mMsg").value||("merge "+br)});after(r,"Merged");};
+}
+async function afterBranch(res,verb){closeModal();
+  const ok=res&&res.status==="ok";
+  toast(ok?verb:(res&&res.message?res.message:verb+" failed"),!ok);
+  await loadState();renderBranches();
+}
 async function after(res,verb){closeModal();
   const ok=res&&(res.status==="ok"||(res.data&&(res.data.oid||res.data.seq)));
   toast(ok?verb:(res&&res.message?res.message:verb+" failed"),!ok);
@@ -958,6 +1053,12 @@ async function after(res,verb){closeModal();
 $("find").addEventListener("input",e=>{S.q=e.target.value;renderTree();});
 $("refresh").onclick=()=>{const keep=S.sel;loadState().then(()=>{if(keep)selectRecord(keep);});};
 $("env").addEventListener("change",()=>{S.sel=null;S.open={};loadState();});
+$("branch").addEventListener("change",()=>renderBranches());
+$("newBranch").onclick=()=>openCreateBranch();
+$("draftCommit").onclick=()=>openDraftCommit();
+$("branchDiff").onclick=()=>showBranchDiff();
+$("openPr").onclick=()=>openPrModal();
+$("mergePr").onclick=()=>openMergeModal();
 loadState();
 </script>
 </body>

@@ -17,6 +17,7 @@ from cfg.adapters.base import (
     StaleLive,
 )
 from cfg.core.config import (
+    BranchesConfig,
     CollectionConfig,
     EnvConfig,
     HistoryConfig,
@@ -252,6 +253,257 @@ def test_bulk_commit_parser_accepts_list_and_mapping_shapes() -> None:
     ]
 
 
+def test_branching_requires_explicit_config() -> None:
+    engine, _adapter = _engine()
+
+    with pytest.raises(ValueError, match="branching is not enabled"):
+        engine.branch_list()
+
+
+def test_branch_create_list_delete_never_mutates_runtime() -> None:
+    engine, adapter = _engine(
+        records={("demo", "alpha"): {"id": "alpha", "value": 1}},
+        branches=BranchesConfig(enabled=True),
+    )
+
+    created = engine.branch_create("router-test", from_branch="main", message="try a route")
+    listed = engine.branch_list()
+    deleted = engine.branch_delete("router-test")
+
+    assert created["runtime_mutated"] is False
+    assert [row["name"] for row in listed] == ["main", "router-test"]
+    assert deleted == {"state": "deleted", "branch": "router-test", "runtime_mutated": False}
+    assert adapter.records == {("demo", "alpha"): {"id": "alpha", "value": 1}}
+    assert adapter.history == []
+    assert adapter.get_ref("branch", "router-test") is None
+
+
+def test_branch_delete_blocks_open_prs() -> None:
+    engine, adapter = _engine(branches=BranchesConfig(enabled=True))
+    engine.branch_create("router-test")
+    adapter.put_ref(
+        {
+            "type": "pr",
+            "id": "pr-1",
+            "status": "open",
+            "head_branch": "router-test",
+            "created_at": adapter.now(),
+            "updated_at": adapter.now(),
+        }
+    )
+
+    with pytest.raises(ValueError, match="open PR"):
+        engine.branch_delete("router-test")
+
+
+def test_branch_commit_writes_draft_ref_without_runtime_mutation() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    base = {"id": "alpha", "value": 1}
+    row = _history_row(coll, base, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): base},
+        history=[row],
+        heads={("demo", "alpha"): row},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+
+    result = engine.branch_commit(
+        "router-test",
+        RecordRef("demo", "alpha"),
+        {"id": "alpha", "value": 2},
+        message="try a branch value",
+    )
+
+    assert result["state"] == "committed"
+    assert result["runtime_mutated"] is False
+    assert adapter.records[("demo", "alpha")] == base
+    assert len(adapter.history) == 1
+    branch = adapter.get_ref("branch", "router-test")
+    assert branch["head_commit_id"] == result["commit_id"]
+    draft = adapter.get_ref("branch_commit", result["commit_id"])
+    assert draft["doc"]["value"] == 2
+    assert draft["meta"]["base_head_oid"] == row["oid"]
+
+
+def test_branch_diff_compares_draft_against_main_head() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    base = {"id": "alpha", "value": 1}
+    row = _history_row(coll, base, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, _adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): base},
+        history=[row],
+        heads={("demo", "alpha"): row},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+    engine.branch_commit(
+        "router-test",
+        RecordRef("demo", "alpha"),
+        {"id": "alpha", "value": 2},
+        message="try a branch value",
+    )
+
+    result = engine.branch_diff("main..router-test")
+
+    assert result["runtime_mutated"] is False
+    assert result["records"][0]["collection"] == "demo"
+    assert result["records"][0]["record_id"] == "alpha"
+    assert result["records"][0]["changes"] == [{"path": "value", "op": "change", "before": 1, "after": 2}]
+
+
+def test_branch_diff_uses_latest_commit_per_record_even_with_same_timestamp() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    base = {"id": "alpha", "value": 1}
+    row = _history_row(coll, base, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, _adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): base},
+        history=[row],
+        heads={("demo", "alpha"): row},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+    engine.branch_commit("router-test", RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}, message="draft one")
+    engine.branch_commit("router-test", RecordRef("demo", "alpha"), {"id": "alpha", "value": 3}, message="draft two")
+
+    result = engine.branch_diff("main..router-test")
+
+    assert result["records"][0]["changes"] == [{"path": "value", "op": "change", "before": 1, "after": 3}]
+
+
+def test_branch_bulk_commit_blocks_all_writes_on_drift() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    alpha_head = {"id": "alpha", "value": 1}
+    beta = {"id": "beta", "value": 10}
+    row_a = _history_row(coll, alpha_head, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    row_b = _history_row(coll, beta, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): {"id": "alpha", "value": 999}, ("demo", "beta"): beta},
+        history=[row_a, row_b],
+        heads={("demo", "alpha"): row_a, ("demo", "beta"): row_b},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+
+    result = engine.branch_commit_many(
+        "router-test",
+        [
+            (RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}),
+            (RecordRef("demo", "beta"), {"id": "beta", "value": 20}),
+        ],
+        message="batch draft",
+    )
+
+    assert result["state"] == "blocked"
+    assert adapter.list_refs("branch_commit", branch="router-test") == []
+
+
+def test_pr_create_and_close_are_review_refs_only() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    base = {"id": "alpha", "value": 1}
+    row = _history_row(coll, base, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): base},
+        history=[row],
+        heads={("demo", "alpha"): row},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+    engine.branch_commit("router-test", RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}, message="draft")
+
+    pr = engine.pr_create(base="main", head="router-test", message="review draft")
+    closed = engine.pr_close(pr["id"])
+
+    assert pr["runtime_mutated"] is False
+    assert closed["status"] == "closed"
+    assert adapter.records[("demo", "alpha")] == base
+    assert len(adapter.history) == 1
+
+
+def test_pr_merge_is_the_only_branch_operation_that_mutates_runtime() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    base = {"id": "alpha", "value": 1}
+    row = _history_row(coll, base, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): base},
+        history=[row],
+        heads={("demo", "alpha"): row},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+    engine.branch_commit("router-test", RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}, message="draft")
+    pr = engine.pr_create(base="main", head="router-test", message="review draft")
+
+    result = engine.pr_merge(pr["id"])
+
+    assert result["state"] == "merged"
+    assert result["runtime_mutated"] is True
+    assert adapter.records[("demo", "alpha")]["value"] == 2
+    assert adapter.history[-1]["op"] == "merge"
+    assert adapter.history[-1]["meta"]["source_pr_id"] == pr["id"]
+    assert adapter.get_ref("pr", pr["id"])["status"] == "merged"
+
+
+def test_pr_merge_blocks_stale_main_head() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    base = {"id": "alpha", "value": 1}
+    row = _history_row(coll, base, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): base},
+        history=[row],
+        heads={("demo", "alpha"): row},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+    engine.branch_commit("router-test", RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}, message="draft")
+    pr = engine.pr_create(base="main", head="router-test", message="review draft")
+    engine.commit(RecordRef("demo", "alpha"), {"id": "alpha", "value": 3}, message="main moved")
+
+    result = engine.pr_merge(pr["id"])
+
+    assert result["state"] == "stale"
+    assert result["runtime_mutated"] is False
+    assert adapter.records[("demo", "alpha")]["value"] == 3
+
+
+def test_pr_merge_blocks_multi_record_until_batch_atomicity_exists() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    alpha = {"id": "alpha", "value": 1}
+    beta = {"id": "beta", "value": 10}
+    row_a = _history_row(coll, alpha, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    row_b = _history_row(coll, beta, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): alpha, ("demo", "beta"): beta},
+        history=[row_a, row_b],
+        heads={("demo", "alpha"): row_a, ("demo", "beta"): row_b},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+    engine.branch_commit_many(
+        "router-test",
+        [
+            (RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}),
+            (RecordRef("demo", "beta"), {"id": "beta", "value": 20}),
+        ],
+        message="draft batch",
+    )
+    pr = engine.pr_create(base="main", head="router-test", message="review batch")
+
+    with pytest.raises(AtomicityUnavailable, match="multi-record PR merge"):
+        engine.pr_merge(pr["id"])
+
+    assert adapter.records[("demo", "alpha")]["value"] == 1
+    assert adapter.records[("demo", "beta")]["value"] == 10
+
+
 class FakeAdapter:
     def __init__(
         self,
@@ -268,6 +520,7 @@ class FakeAdapter:
         self.records = deepcopy(records or {})
         self.history = deepcopy(history or [])
         self.heads = deepcopy(heads or {})
+        self.refs: dict[tuple[str, str], dict[str, Any]] = {}
         self.atomic = True
         self.principal = principal
         self.invariant_violations = invariant_violations or []
@@ -337,6 +590,28 @@ class FakeAdapter:
 
     def list_tags(self) -> list[dict]:
         return []
+
+    def put_ref(self, doc: dict) -> None:
+        stored = deepcopy(doc)
+        stored["env"] = self.env_name
+        self.refs[(stored["type"], stored["id"])] = stored
+
+    def get_ref(self, ref_type: str, ref_id: str) -> dict | None:
+        row = self.refs.get((ref_type, ref_id))
+        return deepcopy(row) if row is not None else None
+
+    def list_refs(self, ref_type: str, **filters) -> list[dict]:
+        rows = []
+        for (stored_type, _), row in self.refs.items():
+            if stored_type != ref_type:
+                continue
+            if any(row.get(key) != value for key, value in filters.items() if value is not None):
+                continue
+            rows.append(deepcopy(row))
+        return sorted(rows, key=lambda row: (str(row.get("created_at")), row["id"]))
+
+    def delete_ref(self, ref_type: str, ref_id: str) -> None:
+        self.refs.pop((ref_type, ref_id), None)
 
     def apply(
         self,
@@ -431,6 +706,7 @@ def _engine(
     identity: Identity | None = None,
     identity_config: IdentityConfig | None = None,
     invariant_violations: list[str] | None = None,
+    branches: BranchesConfig | None = None,
 ) -> tuple[Engine, FakeAdapter]:
     coll = collection or CollectionConfig(name="demo", id_field="id")
     project = ProjectConfig(
@@ -447,6 +723,7 @@ def _engine(
                 identity=identity_config or IdentityConfig(),
             )
         },
+        branches=branches or BranchesConfig(),
         secrets=secrets or SecretsConfig(),
     )
     adapter = FakeAdapter(

@@ -125,6 +125,55 @@ secret-shaped fields and values from `[secrets]`. Fields in `secret_fields` are
 stripped before history. Use `--allow-secret` only for intentional fixtures or
 false positives; cfgit records that override in history metadata.
 
+## Branches and PRs
+
+Branching is opt-in:
+
+```toml
+[branches]
+enabled = true
+refs_collection = "cfgit_refs"
+default_branch = "main"
+```
+
+Run `cfg init` after enabling it. The default `main` branch is the live runtime
+line. Branch and PR objects live in cfgit's refs store; they do not replace
+runtime records.
+
+Create a branch and draft a single-record change:
+
+```bash
+cfg branch create router-test --from main
+cfg --branch router-test commit agent_configs:agent_planner --from planner.json -m "try router"
+cfg diff main..router-test
+cfg --branch router-test log
+```
+
+Draft a multi-record change with the same bulk file format:
+
+```bash
+cfg --branch router-test commit --bulk-from batch.json -m "try router batch"
+```
+
+Open and merge a PR:
+
+```bash
+cfg pr create --base main --head router-test -m "review router"
+cfg pr list
+cfg pr show <pr-id>
+cfg pr merge <pr-id>
+```
+
+`cfg pr merge` is the only branch/PR command that mutates runtime. It writes a
+normal canonical history entry with `op = "merge"` and source PR metadata. It
+refuses stale main heads and live drift. In this v1 slice, multi-record PR merge
+is blocked unless the adapter exposes true batch atomicity; split those changes
+into one-record PRs when you need a merge today.
+
+`cfg switch <branch>` only writes local CLI state under `.cfgit/state.json`.
+It does not change runtime. Agents and scripts should prefer explicit
+`--branch <name>` so the target is visible in logs.
+
 ## Adopt drift
 
 When a record was changed by a script, admin console, database shell, or another

@@ -10,6 +10,11 @@ name = "aistudio-control-plane"
 history_collection = "config_history"
 heads_collection   = "config_heads"
 
+[branches]
+enabled = false                         # opt in to branch/PR refs; run cfg init after enabling
+refs_collection = "cfgit_refs"
+default_branch = "main"                 # main is the live runtime line
+
 # One [[collection]] block per live collection cfgit versions IN PLACE.
 # The app keeps reading these directly; cfgit never owns the reads or writes.
 

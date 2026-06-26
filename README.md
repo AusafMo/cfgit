@@ -61,6 +61,7 @@ cfgit is pre-1.0 software. The current implementation includes:
 - Postgres adapter
 - local author permission checks
 - per-environment identity modes with hashed token or DB-principal verification
+- opt-in branch and PR workflow for draft changes before runtime merge
 - system restore by tag or timestamp
 - localhost web UI
 - MCP server
@@ -134,6 +135,11 @@ name = "runtime-control-plane"
 [history]
 history_collection = "config_history"
 heads_collection = "config_heads"
+
+[branches]
+enabled = false
+refs_collection = "cfgit_refs"
+default_branch = "main"
 
 [[collection]]
 name = "agent_configs"
@@ -215,6 +221,21 @@ Bulk commit preflights the whole batch before writing. If any target has
 un-adopted drift, is missing, duplicates another target, or trips the secret
 policy, cfgit applies none of the batch.
 
+Draft changes on a branch before mutating runtime:
+
+```bash
+cfg branch create router-test --from main
+cfg --branch router-test commit agent_configs:agent_planner --from planner.json -m "try router change"
+cfg diff main..router-test
+cfg pr create --base main --head router-test -m "review router change"
+cfg pr merge <pr-id>
+```
+
+Branching is opt-in with `[branches] enabled = true`. `branch`, branch commits,
+branch diff, and PR creation write only cfgit draft/review refs. The only branch
+command that mutates runtime is `cfg pr merge`, and it refuses stale main heads
+or un-adopted live drift.
+
 `commit`, `import`, and `adopt` scan the would-be-stored document for secret-like
 field names and values from `[secrets]`. Fields listed in `secret_fields` are
 stripped before history. Use `--allow-secret` only for intentional fixtures or
@@ -276,6 +297,19 @@ cfg diff <record> [from] [to]
 cfg impact <record> [from] [to]
 cfg commit <record> --from <file.json> -m "message"
 cfg commit --bulk-from <batch.json> -m "message"
+cfg branch list
+cfg branch create <name> --from main
+cfg branch delete <name>
+cfg switch <name>
+cfg --branch <name> commit <record> --from <file.json> -m "message"
+cfg --branch <name> commit --bulk-from <batch.json> -m "message"
+cfg diff main..<branch>
+cfg --branch <branch> log
+cfg pr create --base main --head <branch> -m "message"
+cfg pr list
+cfg pr show <id>
+cfg pr close <id>
+cfg pr merge <id>
 cfg log <record>
 cfg show <record> <ref>
 cfg adopt <record> -m "message"
@@ -305,8 +339,9 @@ Refs:
 MCP server. It reads like a git client: a collection-and-record tree on the left,
 a commit-graph history rail, and a line-aligned side-by-side diff that collapses
 unchanged context (expandable in place) and keeps the field name pinned while you
-scroll. It can run status, diff, impact, commit, log, show, adopt, restore, tag,
-init, import, and fsck, and ships dark and light themes.
+scroll. It can run status, diff, impact, commit, branch draft commits, PR open
+and merge, log, show, adopt, restore, tag, init, import, and fsck, and ships
+dark and light themes.
 
 By default it binds to `127.0.0.1:8765` and tries the next free ports if needed:
 
@@ -340,6 +375,16 @@ Tools include:
 - `cfg_impact`
 - `cfg_commit`
 - `cfg_bulk_commit`
+- `cfg_branch_list`
+- `cfg_branch_create`
+- `cfg_branch_delete`
+- `cfg_branch_diff`
+- `cfg_branch_log`
+- `cfg_pr_create`
+- `cfg_pr_list`
+- `cfg_pr_show`
+- `cfg_pr_close`
+- `cfg_pr_merge`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`
@@ -348,6 +393,7 @@ Tools include:
 - `cfg_fsck`
 - `cfg_whoami`
 - `cfg_init`
+- `cfg_identity_hash`
 
 A portable skill lives at `skills/cfgit/SKILL.md`.
 `cfg_impact` accepts the same `against` list/string as the CLI `--against` flag,

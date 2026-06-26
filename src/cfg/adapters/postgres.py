@@ -47,8 +47,10 @@ class PostgresAdapter:
         self.conn = psycopg.connect(env.uri, autocommit=True, row_factory=dict_row)
         self.history_table_name = project.history.history_collection
         self.heads_table_name = project.history.heads_collection
+        self.refs_table_name = project.branches.refs_collection
         self.history_table = _ident(project.history.history_collection)
         self.heads_table = _ident(project.history.heads_collection)
+        self.refs_table = _ident(project.branches.refs_collection)
 
     def get_record(self, collection: str, record_id: str) -> dict | None:
         with self.conn.cursor() as cur:
@@ -194,6 +196,67 @@ class PostgresAdapter:
                 [self.env_name],
             )
             return [dict(row) for row in cur.fetchall()]
+
+    def put_ref(self, doc: dict) -> None:
+        stored = dict(doc)
+        stored["env"] = self.env_name
+        stored["id"] = str(stored["id"])
+        stored["type"] = str(stored["type"])
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {self.refs_table}
+                    (env, type, id, branch, status, created_at, updated_at, doc)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (env, type, id)
+                DO UPDATE SET
+                    branch = EXCLUDED.branch,
+                    status = EXCLUDED.status,
+                    updated_at = EXCLUDED.updated_at,
+                    doc = EXCLUDED.doc
+                """,
+                [
+                    self.env_name,
+                    stored["type"],
+                    stored["id"],
+                    stored.get("branch") or stored.get("head_branch") or stored.get("name"),
+                    stored.get("status"),
+                    stored.get("created_at") or self.now(),
+                    stored.get("updated_at") or stored.get("created_at") or self.now(),
+                    Jsonb(_jsonable(stored)),
+                ],
+            )
+
+    def get_ref(self, ref_type: str, ref_id: str) -> dict | None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"SELECT doc FROM {self.refs_table} WHERE env = %s AND type = %s AND id = %s",
+                [self.env_name, ref_type, ref_id],
+            )
+            row = cur.fetchone()
+        return dict(row["doc"]) if row else None
+
+    def list_refs(self, ref_type: str, **filters) -> list[dict]:
+        clauses = ["env = %s", "type = %s"]
+        params: list[Any] = [self.env_name, ref_type]
+        for key, value in filters.items():
+            if value is None:
+                continue
+            clauses.append("doc ->> %s = %s")
+            params.extend([key, str(value)])
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"SELECT doc FROM {self.refs_table} WHERE {' AND '.join(clauses)} ORDER BY created_at ASC, id ASC",
+                params,
+            )
+            return [dict(row["doc"]) for row in cur.fetchall()]
+
+    def delete_ref(self, ref_type: str, ref_id: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {self.refs_table} WHERE env = %s AND type = %s AND id = %s",
+                [self.env_name, ref_type, ref_id],
+            )
 
     def apply(
         self,
@@ -411,6 +474,30 @@ class PostgresAdapter:
                 f"CREATE INDEX IF NOT EXISTS {_ident(self.history_table_name + '_tags_idx')} "
                 f"ON {self.history_table} USING GIN (tags)"
             )
+            if self.project.branches.enabled:
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.refs_table} (
+                        env text NOT NULL,
+                        type text NOT NULL,
+                        id text NOT NULL,
+                        branch text,
+                        status text,
+                        created_at timestamptz NOT NULL,
+                        updated_at timestamptz NOT NULL,
+                        doc jsonb NOT NULL,
+                        PRIMARY KEY (env, type, id)
+                    )
+                    """
+                )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS {_ident(self.refs_table_name + '_branch_idx')} "
+                    f"ON {self.refs_table} (env, type, branch, created_at)"
+                )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS {_ident(self.refs_table_name + '_status_idx')} "
+                    f"ON {self.refs_table} (env, type, status, updated_at)"
+                )
 
     def check_runtime_invariant(self, collection: str | None = None) -> list[str]:
         names = [collection] if collection else [c.name for c in self.project.collections]

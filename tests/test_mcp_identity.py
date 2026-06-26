@@ -51,3 +51,26 @@ def test_mcp_bulk_commit_forwards_batch_payload(monkeypatch: pytest.MonkeyPatch)
     assert captured["payload"]["message"] == "bulk tune"
     assert captured["payload"]["items"][0]["record"] == "demo:alpha"
     assert captured["kwargs"]["author"] == "dev@example.com"
+
+
+def test_mcp_branch_and_pr_tools_forward_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cfg.mcp import server
+
+    captured = []
+
+    def fake_call(name, payload, **kwargs):
+        captured.append({"name": name, "payload": payload, "kwargs": kwargs})
+        return {"status": "ok", "code": 0, "message": "", "data": {}}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+
+    server.cfg_branch_create("router-test", from_branch="main", message="draft", config_file=".cfg.toml")
+    server.cfg_commit("demo:alpha", '{"id":"alpha","value":2}', "draft change", branch="router-test")
+    server.cfg_pr_create(head="router-test", message="review draft")
+    server.cfg_pr_merge(id="pr_abc", message="merge draft")
+
+    assert [item["name"] for item in captured] == ["branch_create", "commit", "pr_create", "pr_merge"]
+    assert captured[0]["payload"] == {"name": "router-test", "from_branch": "main", "message": "draft"}
+    assert captured[1]["payload"]["branch"] == "router-test"
+    assert captured[2]["payload"]["head"] == "router-test"
+    assert captured[3]["payload"]["id"] == "pr_abc"

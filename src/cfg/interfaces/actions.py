@@ -12,7 +12,7 @@ from cfg.adapters.base import AtomicityUnavailable, AmbiguousConfig, NoSuchConfi
 from cfg.core.authz import PermissionDenied, permission_role
 from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
-from cfg.core.engine import Engine, RecordRef, SecretBlocked
+from cfg.core.engine import BranchingDisabled, Engine, RecordRef, SecretBlocked
 from cfg.core.identity import IdentityError, resolve_identity, resolve_self_asserted_author
 
 
@@ -21,6 +21,7 @@ class ActionContext:
     config_file: str | None = None
     env: str = "dev"
     author: str | None = None
+    branch: str | None = None
 
 
 EXIT_OK = 0
@@ -72,7 +73,7 @@ def envelope(fn, *args, **kwargs) -> dict[str, Any]:
         return _error("atomicity_unavailable", EXIT_STORAGE, exc)
     except NoSuchConfig as exc:
         return _error("not_found", EXIT_NOT_FOUND, exc)
-    except (SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
+    except (BranchingDisabled, SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
         return _error("error", EXIT_ARG, exc)
     except Exception as exc:
         return _error("error", EXIT_STORAGE, exc)
@@ -144,8 +145,12 @@ def commit(
     *,
     message: str,
     allow_secret: bool = False,
+    branch: str | None = None,
 ) -> tuple[dict[str, Any], int]:
-    result = engine.commit(parse_record(record), doc, message=message, allow_secret=allow_secret)
+    if branch and branch != engine.config.branches.default_branch:
+        result = engine.branch_commit(branch, parse_record(record), doc, message=message, allow_secret=allow_secret)
+    else:
+        result = engine.commit(parse_record(record), doc, message=message, allow_secret=allow_secret)
     code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
     return result, code
 
@@ -156,8 +161,13 @@ def bulk_commit(
     *,
     message: str,
     allow_secret: bool = False,
+    branch: str | None = None,
 ) -> tuple[dict[str, Any], int]:
-    result = engine.commit_many(_bulk_commit_items(items), message=message, allow_secret=allow_secret)
+    parsed = _bulk_commit_items(items)
+    if branch and branch != engine.config.branches.default_branch:
+        result = engine.branch_commit_many(branch, parsed, message=message, allow_secret=allow_secret)
+    else:
+        result = engine.commit_many(parsed, message=message, allow_secret=allow_secret)
     return result, bulk_commit_exit_code(result)
 
 
@@ -230,6 +240,52 @@ def tag(engine: Engine, name: str) -> tuple[list[dict[str, Any]], int]:
     return engine.tag(name), EXIT_OK
 
 
+def branch_list(engine: Engine) -> tuple[list[dict[str, Any]], int]:
+    return engine.branch_list(), EXIT_OK
+
+
+def branch_create(
+    engine: Engine,
+    name: str,
+    *,
+    from_branch: str = "main",
+    message: str | None = None,
+) -> tuple[dict[str, Any], int]:
+    return engine.branch_create(name, from_branch=from_branch, message=message), EXIT_OK
+
+
+def branch_delete(engine: Engine, name: str) -> tuple[dict[str, Any], int]:
+    return engine.branch_delete(name), EXIT_OK
+
+
+def branch_diff(engine: Engine, range_expr: str) -> tuple[dict[str, Any], int]:
+    return engine.branch_diff(range_expr), EXIT_OK
+
+
+def branch_log(engine: Engine, branch: str, *, limit: int | None = 20) -> tuple[list[dict[str, Any]], int]:
+    return engine.branch_log(branch, limit=limit), EXIT_OK
+
+
+def pr_create(engine: Engine, *, base: str, head: str, message: str) -> tuple[dict[str, Any], int]:
+    return engine.pr_create(base=base, head=head, message=message), EXIT_OK
+
+
+def pr_list(engine: Engine, *, status: str | None = None) -> tuple[list[dict[str, Any]], int]:
+    return engine.pr_list(status=status), EXIT_OK
+
+
+def pr_show(engine: Engine, pr_id: str) -> tuple[dict[str, Any], int]:
+    return engine.pr_show(pr_id), EXIT_OK
+
+
+def pr_close(engine: Engine, pr_id: str) -> tuple[dict[str, Any], int]:
+    return engine.pr_close(pr_id), EXIT_OK
+
+
+def pr_merge(engine: Engine, pr_id: str, *, message: str | None = None) -> tuple[dict[str, Any], int]:
+    return engine.pr_merge(pr_id, message=message), EXIT_OK
+
+
 def fsck(engine: Engine) -> tuple[dict[str, Any], int]:
     return {
         "invariant_violations": engine.adapter.check_runtime_invariant(),
@@ -297,6 +353,7 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
                 payload.get("items"),
                 message=str(payload.get("message") or "commit"),
                 allow_secret=bool(payload.get("allow_secret")),
+                branch=_blank_to_none(payload.get("branch")),
             )
         return commit(
             engine,
@@ -304,6 +361,7 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             _doc(payload.get("doc")),
             message=str(payload.get("message") or "commit"),
             allow_secret=bool(payload.get("allow_secret")),
+            branch=_blank_to_none(payload.get("branch")),
         )
     if name in {"bulk_commit", "commit_many"}:
         return bulk_commit(
@@ -311,6 +369,7 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             payload.get("items"),
             message=str(payload.get("message") or "bulk commit"),
             allow_secret=bool(payload.get("allow_secret")),
+            branch=_blank_to_none(payload.get("branch")),
         )
     if name == "log":
         return log(engine, _required(payload, "record"), limit=int(payload.get("limit") or 20))
@@ -336,6 +395,36 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
         )
     if name == "tag":
         return tag(engine, _required(payload, "name"))
+    if name == "branch_list":
+        return branch_list(engine)
+    if name == "branch_create":
+        return branch_create(
+            engine,
+            _required(payload, "name"),
+            from_branch=str(payload.get("from_branch") or payload.get("from") or "main"),
+            message=_blank_to_none(payload.get("message")),
+        )
+    if name == "branch_delete":
+        return branch_delete(engine, _required(payload, "name"))
+    if name == "branch_diff":
+        return branch_diff(engine, _required(payload, "range"))
+    if name == "branch_log":
+        return branch_log(engine, _required(payload, "branch"), limit=int(payload.get("limit") or 20))
+    if name == "pr_create":
+        return pr_create(
+            engine,
+            base=str(payload.get("base") or "main"),
+            head=_required(payload, "head"),
+            message=str(payload.get("message") or "open PR"),
+        )
+    if name == "pr_list":
+        return pr_list(engine, status=_blank_to_none(payload.get("status")))
+    if name == "pr_show":
+        return pr_show(engine, _required(payload, "id"))
+    if name == "pr_close":
+        return pr_close(engine, _required(payload, "id"))
+    if name == "pr_merge":
+        return pr_merge(engine, _required(payload, "id"), message=_blank_to_none(payload.get("message")))
     if name == "fsck":
         return fsck(engine)
     if name == "impact":
@@ -428,6 +517,7 @@ def plain_init(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "atomic": asdict(atomic) if is_dataclass(atomic) else atomic,
         "invariant_violations": result["invariant_violations"],
+        "branches": result.get("branches"),
     }
 
 

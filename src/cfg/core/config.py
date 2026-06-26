@@ -35,6 +35,13 @@ class HistoryConfig:
 
 
 @dataclass(frozen=True)
+class BranchesConfig:
+    enabled: bool = False
+    refs_collection: str = "cfgit_refs"
+    default_branch: str = "main"
+
+
+@dataclass(frozen=True)
 class PermissionConfig:
     mode: str = "open"
     admins: tuple[str, ...] = ()
@@ -97,6 +104,7 @@ class ProjectConfig:
     history: HistoryConfig
     collections: tuple[CollectionConfig, ...]
     envs: dict[str, EnvConfig]
+    branches: BranchesConfig = field(default_factory=BranchesConfig)
     author_from: str = "git"
     connections: ConnectionsConfig = field(default_factory=ConnectionsConfig)
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
@@ -135,6 +143,7 @@ def load_config(path: str | Path | None = None) -> ProjectConfig:
         )
 
     history_raw = raw.get("history") or {}
+    branches_raw = raw.get("branches") or {}
     author_raw = raw.get("author") or {}
     connections_raw = raw.get("connections") or {}
     secrets_raw = raw.get("secrets") or {}
@@ -145,6 +154,7 @@ def load_config(path: str | Path | None = None) -> ProjectConfig:
             history_collection=str(history_raw.get("history_collection", "config_history")),
             heads_collection=str(history_raw.get("heads_collection", "config_heads")),
         ),
+        branches=_load_branches(branches_raw),
         collections=collections,
         envs=envs,
         author_from=str(author_raw.get("from", "git")),
@@ -176,6 +186,15 @@ def _load_collection(data: dict[str, Any]) -> CollectionConfig:
         ignore_patterns=tuple(str(x) for x in ignore_patterns),
         ignore_paths=tuple(str(x) for x in data.get("ignore_paths", ())),
         secret_fields=tuple(str(x) for x in secret_fields),
+    )
+
+
+def _load_branches(data: dict[str, Any]) -> BranchesConfig:
+    default_branch = str(data.get("default_branch", "main")).strip() or "main"
+    return BranchesConfig(
+        enabled=bool(data.get("enabled", False)),
+        refs_collection=str(data.get("refs_collection", "cfgit_refs")).strip() or "cfgit_refs",
+        default_branch=default_branch,
     )
 
 

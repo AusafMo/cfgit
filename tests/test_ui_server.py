@@ -43,6 +43,15 @@ def test_bind_server_falls_back_when_port_is_not_explicit() -> None:
             server.server_close()
 
 
+def test_ui_contains_branch_and_pr_controls() -> None:
+    from cfg.ui.server import UI_HTML
+
+    for marker in ('id="branch"', 'id="newBranch"', 'id="draftCommit"', 'id="openPr"', 'id="mergePr"'):
+        assert marker in UI_HTML
+    assert "branch_create" in UI_HTML
+    assert "pr_merge" in UI_HTML
+
+
 class _busy_port:
     def __enter__(self) -> int:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

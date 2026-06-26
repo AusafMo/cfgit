@@ -141,13 +141,14 @@ def cfg_commit(
     doc_json: str,
     message: str,
     allow_secret: bool = False,
+    branch: str | None = None,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
 ) -> dict[str, Any]:
     return _call(
         "commit",
-        {"record": record, "doc": doc_json, "message": message, "allow_secret": allow_secret},
+        {"record": record, "doc": doc_json, "message": message, "allow_secret": allow_secret, "branch": branch},
         config_file=config_file,
         env=env,
         author=author,
@@ -159,6 +160,7 @@ def cfg_bulk_commit(
     items: list[dict[str, Any]] | dict[str, Any] | str,
     message: str,
     allow_secret: bool = False,
+    branch: str | None = None,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
@@ -171,7 +173,7 @@ def cfg_bulk_commit(
     """
     return _call(
         "bulk_commit",
-        {"items": items, "message": message, "allow_secret": allow_secret},
+        {"items": items, "message": message, "allow_secret": allow_secret, "branch": branch},
         config_file=config_file,
         env=env,
         author=author,
@@ -272,6 +274,119 @@ def cfg_tag(
     author: str | None = None,
 ) -> dict[str, Any]:
     return _call("tag", {"name": name}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_branch_list(config_file: str | None = None, env: str = "dev", author: str | None = None) -> dict[str, Any]:
+    return _call("branch_list", {}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_branch_create(
+    name: str,
+    from_branch: str = "main",
+    message: str | None = None,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call(
+        "branch_create",
+        {"name": name, "from_branch": from_branch, "message": message},
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
+def cfg_branch_delete(
+    name: str,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call("branch_delete", {"name": name}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_branch_diff(
+    range: str,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call("branch_diff", {"range": range}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_branch_log(
+    branch: str,
+    limit: int = 20,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call("branch_log", {"branch": branch, "limit": limit}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_pr_create(
+    head: str,
+    message: str,
+    base: str = "main",
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call(
+        "pr_create",
+        {"base": base, "head": head, "message": message},
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
+def cfg_pr_list(
+    status: str | None = None,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call("pr_list", {"status": status}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_pr_show(
+    id: str,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call("pr_show", {"id": id}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_pr_close(
+    id: str,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call("pr_close", {"id": id}, config_file=config_file, env=env, author=author)
+
+
+@mcp.tool()
+def cfg_pr_merge(
+    id: str,
+    message: str | None = None,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    return _call("pr_merge", {"id": id, "message": message}, config_file=config_file, env=env, author=author)
 
 
 @mcp.tool()
