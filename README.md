@@ -10,13 +10,13 @@ same database. Your scripts and admin tools can still write it. cfgit sits besid
 the store, records what changed, and refuses to clobber changes it did not record.
 
 <p align="center">
-  <img src="docs/screenshots/01-diff.png" alt="Side-by-side line diff of a live agent config, with a sticky field header and collapsed context" width="32%" />
-  <img src="docs/screenshots/02-impact.png" alt="System-impact panel: deterministic facts plus opt-in LLM narration of what the change does downstream" width="32%" />
-  <img src="docs/screenshots/03-scoped-impact.png" alt="Scoped impact: select records on the left and reason the change against only those" width="32%" />
+  <img src="docs/screenshots/01-diff.png" alt="Production-shaped support agent drift with collection stats, branch workflow controls, history, and line-aligned diff" width="32%" />
+  <img src="docs/screenshots/02-impact.png" alt="High-risk system-impact panel for a refund-resolution agent change with provider-backed LLM narration" width="32%" />
+  <img src="docs/screenshots/03-scoped-impact.png" alt="Scoped impact analysis with selected policy, eval, and rollout records plus provider-backed narration" width="32%" />
 </p>
 
 <p align="center">
-  <sub>Line-aligned diff of a live record &nbsp;·&nbsp; system-impact panel &nbsp;·&nbsp; impact scoped to the records you select &nbsp;(demo data)</sub>
+  <sub>Production-shaped drift review &nbsp;·&nbsp; narrated whole-system impact &nbsp;·&nbsp; narrated impact scoped to selected policy, eval, and rollout records</sub>
 </p>
 
 ## Why cfgit exists
@@ -357,11 +357,11 @@ If you omit `--port`, cfgit will try the next free local ports. If you pass
 `--port` explicitly, cfgit treats that port as intentional and fails if it is
 already in use.
 
-## Synthetic UI demo
+## Production-shaped UI demo
 
-The repo includes a fake support-control-plane fixture for screenshots, demos,
-and UI testing. It creates only synthetic records in the database you pass; use a
-throwaway database name when you want to keep the run contained.
+The repo includes a safe support-control-plane fixture for screenshots, demos,
+and UI testing. It creates synthetic records only in the database you pass; use a
+throwaway database name when you want the run contained.
 
 ```bash
 python examples/seed_support_demo.py \
@@ -369,22 +369,26 @@ python examples/seed_support_demo.py \
   --db cfgit_ui_demo \
   --reset
 
-cfg --config-file examples/cfgit-support-demo.toml init
-cfg --config-file examples/cfgit-support-demo.toml import --all -m "initial synthetic demo import"
+cfg --config-file examples/cfgit-support-demo.toml --env dev init
+cfg --config-file examples/cfgit-support-demo.toml --env dev import --all -m "initial production-shaped demo import"
 
 python examples/seed_support_demo.py \
   --uri 'mongodb://localhost:27017/?replicaSet=rs0' \
   --db cfgit_ui_demo \
   --drift
 
-cfg --config-file examples/cfgit-support-demo.toml ui
+cfg --config-file examples/cfgit-support-demo.toml --env dev status
+cfg --config-file examples/cfgit-support-demo.toml --env dev ui
 ```
 
-The first seed creates clean planner, critic, router, model, and policy records.
-The `--drift` pass then simulates an admin-console edit: planner routing changes,
-the refund policy changes, and a new entitlements resolver appears. That gives
-the UI useful drift, impact, adopt, branch, PR, merge, and restore-history paths
-without using proprietary data.
+The base seed creates a realistic support-agent runtime surface: orchestrator
+and specialist agent configs, model routing, policy rules, tool registry records,
+routing policies, escalation policies, eval suites, rollout controls, and
+knowledge-source allowlists. The `--drift` pass simulates admin-console edits to
+refund automation, refund policy, routing confidence, eval gates, rollout
+traffic, and a new loyalty-credit tool. That gives the UI useful drift, impact,
+scoped impact, adopt, branch, PR, merge, and restore-history paths without using
+proprietary data.
 
 ## MCP and agent usage
 

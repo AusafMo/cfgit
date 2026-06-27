@@ -31,6 +31,48 @@ live_when = { active = true }
 ignore_fields = ["_id", "active", "updated_at", "updated_by"]
 secret_fields = []
 
+[[collection]]
+name = "tool_registry"
+id_field = "tool_id"
+live_when = { enabled = true }
+ignore_fields = ["_id", "enabled", "updated_at", "updated_by"]
+secret_fields = ["credentials.api_key_ref", "oauth.client_secret_ref"]
+
+[[collection]]
+name = "routing_policies"
+id_field = "policy_id"
+live_when = { active = true }
+ignore_fields = ["_id", "active", "updated_at", "updated_by"]
+secret_fields = []
+
+[[collection]]
+name = "escalation_policies"
+id_field = "escalation_id"
+live_when = { active = true }
+ignore_fields = ["_id", "active", "updated_at", "updated_by"]
+secret_fields = []
+
+[[collection]]
+name = "eval_suites"
+id_field = "suite_id"
+live_when = { enabled = true }
+ignore_fields = ["_id", "enabled", "updated_at", "updated_by"]
+secret_fields = []
+
+[[collection]]
+name = "rollout_controls"
+id_field = "rollout_id"
+live_when = { enabled = true }
+ignore_fields = ["_id", "enabled", "updated_at", "updated_by"]
+secret_fields = []
+
+[[collection]]
+name = "knowledge_sources"
+id_field = "source_id"
+live_when = { enabled = true }
+ignore_fields = ["_id", "enabled", "updated_at", "updated_by"]
+secret_fields = []
+
 [secrets]
 block_fields = ["*_key", "*_secret", "*_token", "*api_key*", "*password*"]
 block_values = ["sk-[A-Za-z0-9]{20,}", "AKIA[0-9A-Z]{16}"]
@@ -45,10 +87,24 @@ share_with_ai = []
 ai_provider = "openai"
 warn_level = "none"
 links = [
-  { field = "phase_contract", means = "contract other records may rely on" },
-  { field = "tools", means = "shared tool list" },
-  { field = "fallback_models", means = "fallback model routing" },
+  { field = "agent", means = "agent identifier" },
+  { field = "agents", means = "agent identifiers" },
   { field = "applies_to", means = "policy-to-agent linkage" },
+  { field = "approval_policy", means = "human approval requirement" },
+  { field = "audience", means = "customer or segment targeting" },
+  { field = "escalation_policy", means = "human handoff policy" },
+  { field = "eval_suite", means = "quality gate for a config" },
+  { field = "fallback_models", means = "fallback model routing" },
+  { field = "guarded_by", means = "policy or guardrail dependency" },
+  { field = "handoffs", means = "agent handoff graph" },
+  { field = "knowledge_sources", means = "retrieval source allowlist" },
+  { field = "model", means = "model routing" },
+  { field = "model_path", means = "model identifier" },
+  { field = "policy_refs", means = "referenced policy rules" },
+  { field = "routing_policy", means = "orchestration routing policy" },
+  { field = "rollout_id", means = "rollout gate" },
+  { field = "tool_id", means = "tool identifier" },
+  { field = "tools", means = "shared tool list" },
 ]
 
 [env.dev]
