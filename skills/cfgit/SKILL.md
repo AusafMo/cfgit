@@ -33,6 +33,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 2. Inspect before mutation.
    - `cfg diff <record> =HEAD =live --json`
    - `cfg log <record> --json`
+   - Use MCP `cfg_recent_history` when you need the latest cfgit commits across all configured records before choosing a record.
    - `cfg impact <record> =HEAD =live --json`
    - Scoped LLM review, when explicitly needed: `cfg impact <record> =HEAD =live --against <related-record> --llm --json`
    - If history lookup reports an env mismatch, re-run against the stamped env before making changes.
@@ -83,6 +84,7 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_pr_show`
 - `cfg_pr_close`
 - `cfg_pr_merge`
+- `cfg_recent_history`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`

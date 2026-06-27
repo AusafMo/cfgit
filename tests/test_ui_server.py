@@ -52,6 +52,15 @@ def test_ui_contains_branch_and_pr_controls() -> None:
     assert "pr_merge" in UI_HTML
 
 
+def test_ui_contains_recent_activity_history() -> None:
+    from cfg.ui.server import UI_HTML
+
+    assert "Recent activity" in UI_HTML
+    assert "recent_history" in UI_HTML
+    assert "live drift" in UI_HTML
+    assert "Select a recent entry" in UI_HTML
+
+
 class _busy_port:
     def __enter__(self) -> int:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

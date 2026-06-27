@@ -337,11 +337,14 @@ Refs:
 
 `cfg ui` starts a localhost-only web UI over the same action layer as the CLI and
 MCP server. It reads like a git client: a collection-and-record tree on the left,
-a commit-graph history rail, and a line-aligned side-by-side diff that collapses
-unchanged context (expandable in place) and keeps the field name pinned while you
-scroll. It can run status, diff, impact, commit, branch draft commits, PR open
-and merge, log, show, adopt, restore, tag, init, import, and fsck, and ships
-dark and light themes.
+a recent-activity rail before you select anything, per-record commit graphs, and
+a line-aligned side-by-side diff that collapses unchanged context (expandable in
+place) and keeps the field name pinned while you scroll. The recent activity view
+surfaces live drift and the latest cfgit commits across all configured records,
+so you can see what changed recently without opening records one by one. It can
+run status, diff, impact, commit, branch draft commits, PR open and merge, log,
+show, adopt, restore, tag, init, import, and fsck, and ships dark and light
+themes.
 
 By default it binds to `127.0.0.1:8765` and tries the next free ports if needed:
 
@@ -385,6 +388,7 @@ Tools include:
 - `cfg_pr_show`
 - `cfg_pr_close`
 - `cfg_pr_merge`
+- `cfg_recent_history`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`

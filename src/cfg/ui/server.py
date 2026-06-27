@@ -125,6 +125,7 @@ class CfgUIHandler(BaseHTTPRequestHandler):
         except Exception:
             branches = []
             prs = []
+        recent, _ = actions.recent_history(engine, limit=50)
         return {
             "status": "dirty" if code == actions.EXIT_DIRTY else "ok",
             "code": code,
@@ -132,6 +133,7 @@ class CfgUIHandler(BaseHTTPRequestHandler):
             "data": {
                 "whoami": actions.to_json(who),
                 "status": actions.to_json(rows),
+                "recent_history": actions.to_json(recent),
                 "branches": actions.to_json(branches),
                 "prs": actions.to_json(prs),
             },
@@ -586,7 +588,7 @@ UI_HTML = r"""<!doctype html>
   <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
 
 <script>
-const S={records:[],branches:[],prs:[],filter:"all",q:"",sel:null,against:new Set(),hist:[],who:null,open:{}};
+const S={records:[],recent:[],branches:[],prs:[],filter:"all",q:"",sel:null,against:new Set(),hist:[],who:null,open:{}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 // inline markdown for LLM narration: escape first (XSS-safe), then render the small
@@ -624,6 +626,7 @@ async function loadState(){
   if(sc&&sc.data&&Array.isArray(sc.data.envs)&&sc.data.envs.length){
     const cur=$("env").value; $("env").innerHTML=sc.data.envs.map(e=>`<option ${e===cur?"selected":""}>${esc(e)}</option>`).join("");}
   S.records=(st.data&&st.data.status)?st.data.status:[];
+  S.recent=(st.data&&st.data.recent_history)?st.data.recent_history:[];
   S.branches=(st.data&&st.data.branches)?st.data.branches:[];
   S.prs=(st.data&&st.data.prs)?st.data.prs:[];
   renderBranches();
@@ -632,6 +635,7 @@ async function loadState(){
   if(Object.keys(S.open).length===0){colls.forEach(c=>{S.open[c]=S.records.some(r=>r.collection===c&&isDrift(r.state));});
     if(!Object.values(S.open).some(Boolean)&&colls[0])S.open[colls[0]]=true;}
   renderFilters();renderTree();
+  if(!S.sel)renderRecentHistory();
 }
 
 function renderBranches(){
@@ -703,6 +707,42 @@ function renderTree(){
     else{selectRecord(d.dataset.k);}
   });
 }
+
+function renderRecentHistory(){
+  const drift=S.records.filter(r=>isDrift(r.state));
+  const recent=S.recent||[];
+  $("histCt").textContent=recent.length?`${recent.length} recent`:"";
+  let h=`<div class="selhdr"><div class="nm">Recent activity</div>
+    <div class="meta"><span class="mono" style="color:var(--faint)">all configured records</span>
+    ${drift.length?`<span class="tag drift">${drift.length} live drift</span>`:`<span class="tag" style="color:var(--moss);background:var(--moss-bg)">no drift</span>`}</div></div>
+    <div class="rail">`;
+  if(drift.length){
+    for(const r of drift){
+      const key=r.collection+":"+r.record_id;
+      h+=`<div class="node live recent" data-k="${esc(key)}"><div class="line"></div><div class="mk"></div>
+        <div class="msg">${esc(r.record_id)}</div>
+        <div class="sub"><span class="op">drift</span><span>${esc(r.collection)}</span><span>live differs from @${esc(r.head_seq??"HEAD")}</span></div></div>`;
+    }
+  }
+  for(const e of recent){
+    const key=e.collection+":"+e.record_id;
+    const sh=(e.oid||"").slice(0,7);const when=(e.recorded_at||"").replace("T"," ").slice(0,16);const op=e.op||"commit";
+    h+=`<div class="node ${opClass(op)} recent" data-k="${esc(key)}" data-seq="${e.seq}"><div class="line"></div><div class="mk"></div>
+      <div class="msg">${esc(e.record_id)}</div>
+      <div class="sub"><span class="op r-${op}">${esc(op)}</span><span>${esc(e.collection)}</span><span>@${e.seq}</span><span>${esc(sh)}</span><span>${esc(e.author||"")}</span>${when?`<span>${esc(when)}</span>`:""}</div>
+      ${e.message?`<div class="sub" style="margin-top:3px">${esc(e.message)}</div>`:""}</div>`;
+  }
+  if(!drift.length&&!recent.length){
+    h+=`<div class="ghost-pane"><div class="big">No recorded activity yet</div>Run an import or commit and the latest changes will appear here.</div>`;
+  }
+  h+=`</div>`;
+  $("hist").innerHTML=h;
+  $("dTitle").textContent="Diff";
+  $("dActs").innerHTML="";
+  $("diff").innerHTML=`<div class="ghost-pane">Select a recent entry or a record to inspect its diff.</div>`;
+  $("hist").querySelectorAll(".node.recent").forEach(n=>n.onclick=()=>selectRecord(n.dataset.k));
+}
+
 function toggleContext(key){
   if(S.against.has(key))S.against.delete(key); else S.against.add(key);
   // the primary record is implicitly its own diff subject; don't also keep it in `against`
