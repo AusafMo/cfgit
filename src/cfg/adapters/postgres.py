@@ -31,7 +31,7 @@ try:  # pragma: no cover - exercised only when postgres extra is installed
     from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ModuleNotFoundError as exc:  # pragma: no cover
-    raise ModuleNotFoundError("install cfgit[postgres] to use PostgresAdapter") from exc
+    raise ModuleNotFoundError("install cfg-vcs[postgres] to use PostgresAdapter") from exc
 
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
