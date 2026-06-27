@@ -253,6 +253,28 @@ def test_bulk_commit_parser_accepts_list_and_mapping_shapes() -> None:
     ]
 
 
+def test_recent_history_sorts_across_records_by_recorded_time() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    old = _history_row(
+        coll,
+        {"id": "alpha", "value": 1},
+        seq=1,
+        valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    new = _history_row(
+        coll,
+        {"id": "beta", "value": 2},
+        seq=1,
+        valid_from=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    engine, _adapter = _engine(collection=coll, history=[old, new])
+
+    rows = engine.recent_history(limit=1)
+
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == "beta"
+
+
 def test_branching_requires_explicit_config() -> None:
     engine, _adapter = _engine()
 

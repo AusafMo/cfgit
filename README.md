@@ -337,11 +337,14 @@ Refs:
 
 `cfg ui` starts a localhost-only web UI over the same action layer as the CLI and
 MCP server. It reads like a git client: a collection-and-record tree on the left,
-a commit-graph history rail, and a line-aligned side-by-side diff that collapses
-unchanged context (expandable in place) and keeps the field name pinned while you
-scroll. It can run status, diff, impact, commit, branch draft commits, PR open
-and merge, log, show, adopt, restore, tag, init, import, and fsck, and ships
-dark and light themes.
+a recent-activity rail before you select anything, per-record commit graphs, and
+a line-aligned side-by-side diff that collapses unchanged context (expandable in
+place) and keeps the field name pinned while you scroll. The recent activity view
+surfaces live drift and the latest cfgit commits across all configured records,
+so you can see what changed recently without opening records one by one. It can
+run status, diff, impact, commit, branch draft commits, PR open and merge, log,
+show, adopt, restore, tag, init, import, and fsck, and ships dark and light
+themes.
 
 By default it binds to `127.0.0.1:8765` and tries the next free ports if needed:
 
@@ -353,6 +356,35 @@ cfg ui --port 9000 --no-open
 If you omit `--port`, cfgit will try the next free local ports. If you pass
 `--port` explicitly, cfgit treats that port as intentional and fails if it is
 already in use.
+
+## Synthetic UI demo
+
+The repo includes a fake support-control-plane fixture for screenshots, demos,
+and UI testing. It creates only synthetic records in the database you pass; use a
+throwaway database name when you want to keep the run contained.
+
+```bash
+python examples/seed_support_demo.py \
+  --uri 'mongodb://localhost:27017/?replicaSet=rs0' \
+  --db cfgit_ui_demo \
+  --reset
+
+cfg --config-file examples/cfgit-support-demo.toml init
+cfg --config-file examples/cfgit-support-demo.toml import --all -m "initial synthetic demo import"
+
+python examples/seed_support_demo.py \
+  --uri 'mongodb://localhost:27017/?replicaSet=rs0' \
+  --db cfgit_ui_demo \
+  --drift
+
+cfg --config-file examples/cfgit-support-demo.toml ui
+```
+
+The first seed creates clean planner, critic, router, model, and policy records.
+The `--drift` pass then simulates an admin-console edit: planner routing changes,
+the refund policy changes, and a new entitlements resolver appears. That gives
+the UI useful drift, impact, adopt, branch, PR, merge, and restore-history paths
+without using proprietary data.
 
 ## MCP and agent usage
 
@@ -385,6 +417,7 @@ Tools include:
 - `cfg_pr_show`
 - `cfg_pr_close`
 - `cfg_pr_merge`
+- `cfg_recent_history`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`

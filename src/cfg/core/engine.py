@@ -1102,6 +1102,11 @@ class Engine:
             with_doc=False,
         )
 
+    def recent_history(self, *, limit: int | None = 50) -> list[dict[str, Any]]:
+        rows = self.adapter.query_history(limit=None, order="desc", with_doc=False)
+        rows = sorted(rows, key=lambda row: (row.get("recorded_at"), row["collection"], row["record_id"], row["seq"]), reverse=True)
+        return rows[:limit] if limit is not None else rows
+
     def tag(self, name: str) -> list[dict[str, Any]]:
         self._authorize("tag")
         tagged: list[dict[str, Any]] = []

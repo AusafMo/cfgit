@@ -74,3 +74,22 @@ def test_mcp_branch_and_pr_tools_forward_payloads(monkeypatch: pytest.MonkeyPatc
     assert captured[1]["payload"]["branch"] == "router-test"
     assert captured[2]["payload"]["head"] == "router-test"
     assert captured[3]["payload"]["id"] == "pr_abc"
+
+
+def test_mcp_recent_history_forwards_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cfg.mcp import server
+
+    captured = {}
+
+    def fake_call(name, payload, **kwargs):
+        captured.update({"name": name, "payload": payload, "kwargs": kwargs})
+        return {"status": "ok", "code": 0, "message": "", "data": []}
+
+    monkeypatch.setattr(server, "_call", fake_call)
+
+    result = server.cfg_recent_history(limit=12, config_file=".cfg.toml", env="dev")
+
+    assert result["status"] == "ok"
+    assert captured["name"] == "recent_history"
+    assert captured["payload"] == {"limit": 12}
+    assert captured["kwargs"]["config_file"] == ".cfg.toml"

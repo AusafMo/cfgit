@@ -269,7 +269,10 @@ cfg ui
 ```
 
 The UI binds to `127.0.0.1`. It is a local operator surface over the same action
-layer as the CLI and MCP server.
+layer as the CLI and MCP server. Before a record is selected, the middle rail
+shows recent activity across all configured records: current live drift plus the
+latest cfgit history entries. Selecting one of those entries opens that record's
+normal history and diff view.
 
 ## JSON mode
 

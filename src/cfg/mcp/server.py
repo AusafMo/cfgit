@@ -198,6 +198,23 @@ def cfg_log(
 
 
 @mcp.tool()
+def cfg_recent_history(
+    limit: int = 50,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Return recent cfgit history entries across all configured records."""
+    return _call(
+        "recent_history",
+        {"limit": limit},
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
 def cfg_show(
     record: str,
     ref: str = "HEAD",

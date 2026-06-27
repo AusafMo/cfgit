@@ -175,6 +175,10 @@ def log(engine: Engine, record: str, *, limit: int | None = 20) -> tuple[list[di
     return engine.log(parse_record(record), limit=limit), EXIT_OK
 
 
+def recent_history(engine: Engine, *, limit: int | None = 50) -> tuple[list[dict[str, Any]], int]:
+    return engine.recent_history(limit=limit), EXIT_OK
+
+
 def show(engine: Engine, record: str, ref: str) -> tuple[dict[str, Any], int]:
     return engine.resolve_ref(parse_record(record), ref), EXIT_OK
 
@@ -373,6 +377,8 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
         )
     if name == "log":
         return log(engine, _required(payload, "record"), limit=int(payload.get("limit") or 20))
+    if name == "recent_history":
+        return recent_history(engine, limit=int(payload.get("limit") or 50))
     if name == "show":
         return show(engine, _required(payload, "record"), str(payload.get("ref") or "HEAD"))
     if name == "adopt":
