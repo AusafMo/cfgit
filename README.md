@@ -66,7 +66,7 @@ cfgit is pre-1.0 software. The current implementation includes:
 - localhost web UI
 - MCP server
 - portable Codex or Claude Code skill
-- optional `cfg-impact` plugin for deterministic impact summaries and opt-in LLM narration
+- optional `cfgit-impact` plugin for deterministic impact summaries and opt-in LLM narration
 
 The engine is intentionally DB-neutral. Mongo and Postgres are the first two
 adapters to prove the storage seam.
@@ -410,7 +410,7 @@ standardize the config so that database always uses one env name.
 paths, finds static references to changed values across configured records, and
 reports a risk level.
 
-Optional LLM narration lives in the separate `cfg-impact` plugin. It reads the
+Optional LLM narration lives in the separate `cfgit-impact` plugin. It reads the
 real before/after of the change plus a map of the surrounding records, then
 explains in plain language what the change does, what it ripples into, and how to
 roll it back:

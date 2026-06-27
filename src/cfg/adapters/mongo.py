@@ -27,7 +27,7 @@ try:  # pragma: no cover - exercised only when mongo extra is installed
     from pymongo.client_session import ClientSession
     from pymongo.errors import OperationFailure
 except ModuleNotFoundError as exc:  # pragma: no cover
-    raise ModuleNotFoundError("install cfg-vcs[mongo] to use MongoAdapter") from exc
+    raise ModuleNotFoundError("install cfgit[mongo] to use MongoAdapter") from exc
 
 
 class MongoAdapter:

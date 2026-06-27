@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e '.[mongo,postgres,mcp,dev]'
+          python -m pip install -e plugins/cfg_impact
+      - name: Run tests
+        run: python -m pytest -q
+
+  package-build:
+    name: package-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build and check distributions
+        run: |
+          python -m pip install -U build twine
+          rm -rf dist plugins/cfg_impact/dist
+          python -m build
+          python -m twine check dist/*
+          cd plugins/cfg_impact
+          python -m build
+          python -m twine check dist/*
