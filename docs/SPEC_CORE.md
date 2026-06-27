@@ -142,7 +142,7 @@ Commands and surfaces (CLI + `--json`, localhost UI, MCP), each across **all con
 - `cfg tag <name>`: bookmark the current state of everything to return to by name.
 - `cfg adopt <record>` / `cfg adopt --all`: fold an out-of-band change into history with attribution (the reconciliation core). Cron-friendly.
 - `cfg fsck`: integrity + drift sweep.
-- `cfg impact <record> [a] [b]`: deterministic system-impact overview, with optional LLM narration from the `cfg-impact` plugin.
+- `cfg impact <record> [a] [b]`: deterministic system-impact overview, with optional LLM narration from the `cfgit-impact` plugin.
 - `cfg identity-hash`: hash a private human token for authenticated identity config without storing the raw token.
 - `cfg ui`: local web UI for the same operations.
 - `cfg-mcp`: MCP server exposing the same operation envelope to agents.
@@ -207,4 +207,4 @@ admin_actions = ["init", "restore_system"]
 
 **v1 implementation correction:** `oid` is a content hash, not a unique entry id. A restore can intentionally create a new history entry whose document content equals an older version, so `(env, collection, record_id, oid)` must be a non-unique lookup index. The unique history key is `(env, collection, record_id, seq)`. HEAD stores both `head_oid` for dirty checks and `head_seq` for exact entry resolution. Any older SPEC.md wording that says `(config_id, oid)` is unique is superseded for v1.
 
-**Build order for v1:** core engine + history schema + hashing + drift detect + mutation permissions → MongoAdapter → `init`/`status`/`diff`/`commit`/`log`/`adopt` → `restore` (single + system) + `tag` + `fsck` → PostgresAdapter (proves the seam) → localhost UI + MCP/skill over the same action layer → `cfg-impact` plugin boundary → point at the two origin collections and run the one-week usage test. Hosted product surfaces wait for signal.
+**Build order for v1:** core engine + history schema + hashing + drift detect + mutation permissions → MongoAdapter → `init`/`status`/`diff`/`commit`/`log`/`adopt` → `restore` (single + system) + `tag` + `fsck` → PostgresAdapter (proves the seam) → localhost UI + MCP/skill over the same action layer → `cfgit-impact` plugin boundary → point at the two origin collections and run the one-week usage test. Hosted product surfaces wait for signal.

@@ -1,5 +1,5 @@
 # Copyright 2026 Mohammad Ausaf. Licensed under the Apache License, Version 2.0.
-"""Lean provider interface for cfg-impact narration."""
+"""Lean provider interface for cfgit-impact narration."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

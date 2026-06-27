@@ -2,9 +2,9 @@
 
 cfgit publishes two Python distributions:
 
-- `cfg-vcs`: Git-style history, diff, drift detection, branch/PR review, and
+- `cfgit`: Git-style history, diff, drift detection, branch/PR review, and
   rollback for live database records without migrating or owning the datastore.
-- `cfg-impact`: optional plugin for deterministic system-impact summaries and
+- `cfgit-impact`: optional plugin for deterministic system-impact summaries and
   opt-in LLM narration of database record diffs.
 
 Current release version: `0.1.1`.
@@ -13,19 +13,19 @@ Current release version: `0.1.1`.
 
 Create both projects on PyPI and configure Trusted Publishing for this repository.
 
-For `cfg-vcs`:
+For `cfgit`:
 
 - Owner: `AusafMo`
 - Repository: `cfgit`
 - Workflow: `publish.yml`
-- Environment: `pypi-cfg-vcs`
+- Environment: `pypi-cfgit`
 
-For `cfg-impact`:
+For `cfgit-impact`:
 
 - Owner: `AusafMo`
 - Repository: `cfgit`
 - Workflow: `publish.yml`
-- Environment: `pypi-cfg-impact`
+- Environment: `pypi-cfgit-impact`
 
 The workflow uses PyPI OpenID Connect, so no PyPI API token is stored in GitHub
 Secrets.
@@ -49,8 +49,8 @@ python -m twine check dist/*
 ```bash
 python -m venv /tmp/cfgit-publish-smoke
 /tmp/cfgit-publish-smoke/bin/python -m pip install \
-  'dist/cfg_vcs-0.1.1-py3-none-any.whl[mcp]' \
-  plugins/cfg_impact/dist/cfg_impact-0.1.1-py3-none-any.whl
+  'dist/cfgit-0.1.1-py3-none-any.whl[mcp]' \
+  plugins/cfg_impact/dist/cfgit_impact-0.1.1-py3-none-any.whl
 /tmp/cfgit-publish-smoke/bin/cfg --help
 /tmp/cfgit-publish-smoke/bin/python -c 'import cfg; import cfg.mcp.server; import cfg_impact; print("imports ok")'
 ```
@@ -65,18 +65,18 @@ git checkout main
 git pull origin main
 git tag v0.1.1
 git push origin v0.1.1
-gh release create v0.1.1 --title "v0.1.1" --notes "First public cfgit release under the cfg-vcs and cfg-impact package names."
+gh release create v0.1.1 --title "v0.1.1" --notes "cfgit 0.1.1 package release."
 ```
 
-The release triggers `.github/workflows/publish.yml`, which publishes `cfg-vcs`
-first and `cfg-impact` second.
+The release triggers `.github/workflows/publish.yml`, which publishes `cfgit`
+first and `cfgit-impact` second.
 
 ## Install
 
 ```bash
-pip install cfg-vcs
-pip install 'cfg-vcs[mongo]'
-pip install 'cfg-vcs[postgres]'
-pip install 'cfg-vcs[mongo,postgres,mcp]'
-pip install cfg-impact
+pip install cfgit
+pip install 'cfgit[mongo]'
+pip install 'cfgit[postgres]'
+pip install 'cfgit[mongo,postgres,mcp]'
+pip install cfgit-impact
 ```

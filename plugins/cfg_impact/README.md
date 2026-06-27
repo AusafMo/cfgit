@@ -1,4 +1,4 @@
-# cfg-impact
+# cfgit-impact
 
 Optional system-impact analysis for cfgit.
 

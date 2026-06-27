@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  publish-cfg-vcs:
-    name: Publish cfg-vcs
+  publish-cfgit:
+    name: Publish cfgit
     runs-on: ubuntu-latest
-    environment: pypi-cfg-vcs
+    environment: pypi-cfgit
     permissions:
       id-token: write
       contents: read
@@ -26,16 +26,16 @@ jobs:
           python -m pip install -U build twine
           python -m build
           python -m twine check dist/*
-      - name: Publish cfg-vcs to PyPI
+      - name: Publish cfgit to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
 
-  publish-cfg-impact:
-    name: Publish cfg-impact
+  publish-cfgit-impact:
+    name: Publish cfgit-impact
     runs-on: ubuntu-latest
-    needs: publish-cfg-vcs
-    environment: pypi-cfg-impact
+    needs: publish-cfgit
+    environment: pypi-cfgit-impact
     permissions:
       id-token: write
       contents: read
@@ -50,7 +50,7 @@ jobs:
           python -m pip install -U build twine
           python -m build
           python -m twine check dist/*
-      - name: Publish cfg-impact to PyPI
+      - name: Publish cfgit-impact to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: plugins/cfg_impact/dist/

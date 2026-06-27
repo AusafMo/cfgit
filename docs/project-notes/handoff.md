@@ -7,7 +7,7 @@
 > - **cfgit is NOT "config version control" and NOT "general database git."** It is **non-custodial version control for live datastores**: git for a database you already have and cannot migrate, versioning records *in place*, without owning the data/reads/writes. Tagline: "git that doesn't make you move in." This is the defensible niche; "general DB git" invites comparison to **Dolt** (which owns the store) and loses.
 > - **The differentiator is DRIFT RECONCILIATION** (`status` detects out-of-band writes, `adopt` folds them into history, `commit` refuses to clobber un-adopted drift), because the team writes the DB from many paths and will NOT lock down creds (flat, equally-accountable startup). Every existing tool avoids this because nothing bypasses them; cfgit needs it.
 > - **v1 is a NARROW feature set on a GENERAL engine, with TWO adapters (Mongo + Postgres)** to prove "any DB." Build: `init`/`status`/`diff`/`commit`/`log`/`adopt`/`restore` (single + system)/`tag`/`fsck`, plus optional engine-level mutation permissions for admin-only high-blast-radius actions. CLI + JSON are the base surface; UI/MCP/skill are thin wrappers over the same actions.
-> - **CURRENT IMPLEMENTATION UPDATE:** CLI + JSON now has a localhost UI, MCP server, portable skill, and an optional `cfg-impact` plugin. Out-of-band hosted approval remains deferred. The impact provider boundary lives only in `plugins/cfg_impact`, never in `src/cfg/core`.
+> - **CURRENT IMPLEMENTATION UPDATE:** CLI + JSON now has a localhost UI, MCP server, portable skill, and an optional `cfgit-impact` plugin. Out-of-band hosted approval remains deferred. The impact provider boundary lives only in `plugins/cfg_impact`, never in `src/cfg/core`.
 > - **`docs/SPEC_CORE.md` is now the authority on framing + v1 scope.** `docs/SPEC.md` (v0.3.2) is the deep engine reference for the parts v1 builds; where they differ on scope, SPEC_CORE wins. Sections of THIS handoff written before the reframe (esp. §1's "config" emphasis and §2's approval-centric decisions) are superseded by SPEC_CORE where they conflict; the backend facts, constraints, env gotchas, and scaffold notes below remain accurate.
 > - Commercial value is a **later discovery, not a reason to build**; assume internal-grade. The real gate is a **one-week usage test**: if the team reaches for `cfg` over raw writes, continue; if they route around it, stop and reassess.
 
@@ -100,7 +100,7 @@ docs/SPEC_v0.1.md       the original v0.1 (historical, shows what the teardown f
 README.md               project intro
 LICENSE                 Apache-2.0
 NOTICE, CREDITS.md      attribution (git=idea-only; semantic-diff prior art cited)
-pyproject.toml          cfg-vcs package; extras: mongo/cli/mcp/impact/dev; `cfg` entrypoint
+pyproject.toml          cfgit package; extras: mongo/cli/mcp/impact/dev; `cfg` entrypoint
 .gitignore
 src/cfg/__init__.py
 src/cfg/core/           engine (no DB driver / no LLM SDK): hashing/asof/engine/refs TO BUILD

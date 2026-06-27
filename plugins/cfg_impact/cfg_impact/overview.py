@@ -412,7 +412,7 @@ def _log_llm_consent(provider_name: str, records: list[str]) -> None:
         return
     _CONSENT_LOGGED.add(key)
     print(
-        f"cfg-impact: sending redacted structural diff for {', '.join(records)} to {provider_name}",
+        f"cfgit-impact: sending redacted structural diff for {', '.join(records)} to {provider_name}",
         file=sys.stderr,
     )
 

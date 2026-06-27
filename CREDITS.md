@@ -33,5 +33,5 @@ cfgit's framing (`SPEC_CORE.md` §3) is defined by contrast with the "git for da
 **Apache-2.0** (see `LICENSE`). Permissive + explicit patent grant, so the company
 and others can adopt freely. Apache-2.0 can depend on MIT/Apache libraries; it
 **cannot** link GPL-2.0 source into the core: a second reason the Git borrowing
-stays concept-only. The optional `cfg-impact` plugin keeps any model-provider SDK
+stays concept-only. The optional `cfgit-impact` plugin keeps any model-provider SDK
 out of the core package, so a differently-licensed SDK can't taint the core license.
