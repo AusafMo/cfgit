@@ -8,7 +8,7 @@ from cfg.core.identity import MIN_TOKEN_LENGTH, hash_token
 from cfg.interfaces import actions
 from cfg.interfaces.actions import ActionContext
 
-try:  # pragma: no cover - exercised when cfg-vcs[mcp] is installed
+try:  # pragma: no cover - exercised when cfgit[mcp] is installed
     from mcp.server.fastmcp import FastMCP
 except ModuleNotFoundError:  # pragma: no cover
     FastMCP = None  # type: ignore[assignment]
@@ -16,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 def _mcp() -> Any:
     if FastMCP is None:
-        raise ModuleNotFoundError("install cfg-vcs[mcp] to run the cfgit MCP server")
+        raise ModuleNotFoundError("install cfgit[mcp] to run the cfgit MCP server")
     return FastMCP("cfgit")
 
 

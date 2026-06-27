@@ -1,7 +1,7 @@
 [project]
-name = "cfg-vcs"
-version = "0.0.0"
-description = "Non-custodial version control for live datastore records"
+name = "cfgit"
+version = "0.1.0"
+description = "Git-style history, diff, drift detection, and rollback for live database records without migrating or owning your datastore"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -15,6 +15,9 @@ keywords = [
   "postgres",
   "mcp",
   "agents",
+  "rollback",
+  "drift-detection",
+  "database-versioning",
 ]
 
 # Core has NO database driver and NO LLM SDK. That boundary is enforced in CI
@@ -29,8 +32,14 @@ mongo = ["pymongo>=4.6"]
 postgres = ["psycopg[binary]>=3.2"]
 cli = ["click>=8.1", "rich>=13.0"]
 mcp = ["mcp>=1.0"]
-impact = []   # the cfg-impact plugin declares its own model-client deps; never in core
+impact = []   # the cfgit-impact plugin declares its own model-client deps; never in core
 dev = ["pytest>=8.0", "pytest-asyncio", "ruff", "mypy", "httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/AusafMo/cfgit"
+Repository = "https://github.com/AusafMo/cfgit"
+Issues = "https://github.com/AusafMo/cfgit/issues"
+Documentation = "https://github.com/AusafMo/cfgit#readme"
 
 [project.scripts]
 cfg = "cfg.cli.main:main"
