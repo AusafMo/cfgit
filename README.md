@@ -357,6 +357,35 @@ If you omit `--port`, cfgit will try the next free local ports. If you pass
 `--port` explicitly, cfgit treats that port as intentional and fails if it is
 already in use.
 
+## Synthetic UI demo
+
+The repo includes a fake support-control-plane fixture for screenshots, demos,
+and UI testing. It creates only synthetic records in the database you pass; use a
+throwaway database name when you want to keep the run contained.
+
+```bash
+python examples/seed_support_demo.py \
+  --uri 'mongodb://localhost:27017/?replicaSet=rs0' \
+  --db cfgit_ui_demo \
+  --reset
+
+cfg --config-file examples/cfgit-support-demo.toml init
+cfg --config-file examples/cfgit-support-demo.toml import --all -m "initial synthetic demo import"
+
+python examples/seed_support_demo.py \
+  --uri 'mongodb://localhost:27017/?replicaSet=rs0' \
+  --db cfgit_ui_demo \
+  --drift
+
+cfg --config-file examples/cfgit-support-demo.toml ui
+```
+
+The first seed creates clean planner, critic, router, model, and policy records.
+The `--drift` pass then simulates an admin-console edit: planner routing changes,
+the refund policy changes, and a new entitlements resolver appears. That gives
+the UI useful drift, impact, adopt, branch, PR, merge, and restore-history paths
+without using proprietary data.
+
 ## MCP and agent usage
 
 The MCP server exposes the same operations with a uniform envelope:

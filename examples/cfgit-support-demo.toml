@@ -1,0 +1,67 @@
+[project]
+name = "cfgit-support-demo"
+
+[history]
+history_collection = "cfgit_demo_history"
+heads_collection = "cfgit_demo_heads"
+
+[branches]
+enabled = true
+refs_collection = "cfgit_demo_refs"
+default_branch = "main"
+
+[[collection]]
+name = "agent_configs"
+id_field = "config_id"
+live_when = { is_active = true }
+ignore_fields = ["_id", "is_active", "updated_at", "updated_by"]
+secret_fields = []
+
+[[collection]]
+name = "modelgarden_models"
+id_field = "model_path"
+live_when = {}
+ignore_fields = ["_id", "updated_at", "updated_by"]
+secret_fields = ["provider_config.api_key"]
+
+[[collection]]
+name = "policy_rules"
+id_field = "rule_id"
+live_when = { active = true }
+ignore_fields = ["_id", "active", "updated_at", "updated_by"]
+secret_fields = []
+
+[secrets]
+block_fields = ["*_key", "*_secret", "*_token", "*api_key*", "*password*"]
+block_values = ["sk-[A-Za-z0-9]{20,}", "AKIA[0-9A-Z]{16}"]
+on_match = "refuse"
+
+[author]
+from = "git"
+
+[connections]
+enabled = true
+share_with_ai = []
+ai_provider = "openai"
+warn_level = "none"
+links = [
+  { field = "phase_contract", means = "contract other records may rely on" },
+  { field = "tools", means = "shared tool list" },
+  { field = "fallback_models", means = "fallback model routing" },
+  { field = "applies_to", means = "policy-to-agent linkage" },
+]
+
+[env.dev]
+database = "mongo"
+uri = "mongodb://localhost:27017/?replicaSet=rs0"
+db = "cfgit_ui_demo"
+needs_approval = false
+
+[env.dev.identity]
+mode = "open"
+
+[env.dev.permissions]
+mode = "open"
+admins = []
+writers = []
+admin_actions = ["restore_system"]

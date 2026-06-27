@@ -301,34 +301,42 @@ UI_HTML = r"""<!doctype html>
     *::-webkit-scrollbar-thumb{background:var(--edge2);border-radius:6px;border:2px solid transparent;background-clip:content-box}
     *::-webkit-scrollbar-thumb:hover{background:var(--faint);background-clip:content-box}
 
-    .app{display:grid;grid-template-rows:auto 1fr;height:100vh;min-height:0}
+    .app{display:grid;grid-template-rows:auto minmax(0,1fr);height:100vh;min-height:0;max-width:100vw;overflow:hidden}
 
     /* ---- top bar ---- */
-    .top{display:flex;align-items:center;gap:16px;padding:0 18px;height:54px;
+    .top{display:flex;align-items:center;gap:12px;padding:0 18px;height:54px;min-width:0;max-width:100vw;
       background:var(--chrome);border-bottom:1px solid var(--edge)}
     .brand{display:flex;align-items:baseline;gap:2px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:-.01em}
     .brand .dot{color:var(--blue)}
-    .who{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dim)}
+    .who{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--dim);min-width:0}
     .who .ava{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-family:var(--mono);
       font-size:10px;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--blue),var(--blue2))}
     .who b{color:var(--ink);font-weight:600}
+    #whoTxt{display:block;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
       padding:2px 9px;border-radius:999px;border:1px solid var(--edge2);color:var(--dim)}
     .chip.open{color:var(--moss);border-color:var(--moss-bg);background:var(--moss-bg)}
-    .top .sp{flex:1}
-    .seg{display:flex;background:var(--panel);border:1px solid var(--edge2);border-radius:8px;padding:2px;gap:2px}
+    .top .sp{flex:1;min-width:0}
+    .scopebar,.cmdset{display:flex;align-items:center;gap:7px;min-width:0}
+    .scopebar{padding-left:10px;border-left:1px solid var(--edge)}
+    .cmdset{padding-left:4px}
+    .pick{display:flex;align-items:center;gap:6px;min-width:0}
+    .pick span{font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+    .seg{display:flex;background:var(--panel);border:1px solid var(--edge2);border-radius:8px;padding:2px;gap:2px;min-width:0}
     .seg button{border:0;background:transparent;color:var(--dim);padding:4px 9px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1}
     .seg button.on{background:var(--raise);color:var(--ink)}
-    .envpick{background:var(--panel);border:1px solid var(--edge2);border-radius:8px;color:var(--ink);
+    .envpick{background:var(--panel);border:1px solid var(--edge2);border-radius:8px;color:var(--ink);min-width:0;
       padding:6px 9px;font-size:12.5px;font-family:var(--mono)}
-    .branchpick{max-width:170px}
-    .ghost{background:transparent;border:1px solid var(--edge2);border-radius:8px;color:var(--dim);
-      padding:6px 11px;font-size:12.5px;cursor:pointer}
-    .ghost:hover{color:var(--ink);border-color:var(--blue)}
+    .branchpick{width:170px;max-width:170px}
+    .ghost{background:transparent;border:1px solid var(--edge2);border-radius:8px;color:var(--dim);min-width:0;
+      padding:6px 11px;font-size:12.5px;cursor:pointer;white-space:nowrap}
+    .ghost:hover:not(:disabled){color:var(--ink);border-color:var(--blue);background:var(--panel)}
+    .ghost:disabled{opacity:.42;cursor:default}
+    button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 
     /* ---- 3 columns ---- */
-    .cols{display:grid;grid-template-columns:300px 320px 1fr;min-height:0}
-    .pane{min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--edge);overflow:hidden;background:var(--bg)}
+    .cols{display:grid;grid-template-columns:minmax(240px,300px) minmax(260px,320px) minmax(0,1fr);min-height:0;min-width:0;max-width:100vw}
+    .pane{min-height:0;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--edge);overflow:hidden;background:var(--bg)}
     .pane:last-child{border-right:0}
     .ph{display:flex;align-items:center;gap:9px;height:42px;padding:0 14px;flex:0 0 auto;
       border-bottom:1px solid var(--edge);background:var(--chrome)}
@@ -423,25 +431,27 @@ UI_HTML = r"""<!doctype html>
     /* ---- RIGHT: paper diff (the reading surface) ---- */
     .dhead{display:flex;align-items:center;gap:10px;height:42px;padding:0 16px;flex:0 0 auto;
       border-bottom:1px solid var(--edge);background:var(--chrome)}
-    .dhead .t{font-size:12.5px;color:var(--dim)}
+    .dhead .t{font-size:12.5px;color:var(--dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .dhead .t b{color:var(--ink);font-family:var(--mono)}
     .dhead .sp{flex:1}
+    #dActs{display:flex;align-items:center;gap:8px;min-width:0}
     .btn{border:1px solid var(--edge2);border-radius:8px;padding:6px 13px;font-size:12.5px;cursor:pointer;
-      background:var(--panel);color:var(--ink);font-weight:500}
-    .btn:hover{border-color:var(--blue)}
+      background:var(--panel);color:var(--ink);font-weight:500;white-space:nowrap}
+    .btn:hover:not(:disabled){border-color:var(--blue);background:var(--panel2)}
     .btn.go{background:var(--blue);border-color:var(--blue);color:#fff}
-    .btn.go:hover{background:var(--blue2)}
+    .btn.go:hover:not(:disabled){background:var(--blue2)}
     .btn.warn{color:var(--amber);border-color:var(--amber-bg)}
     .btn:disabled{opacity:.45;cursor:default}
     /* padding lives on .paper as margin (not on the scroll box) so the sticky field header
        pins flush to the visible top edge — sticky top:0 references the scroll content box. */
-    .paperwrap{flex:1;min-height:0;overflow:auto;background:var(--bg)}
+    .paperwrap{flex:1;min-height:0;min-width:0;overflow:auto;background:
+      linear-gradient(180deg,rgba(255,255,255,.018),transparent 120px),var(--bg);padding:16px}
     /* no overflow:hidden here — it would clip the sticky field header. Round the top via the
        legend; the bottom rows sit flush (the paper border still reads as rounded). */
-    .paper{background:var(--paper);color:var(--paper-ink);border:1px solid var(--paper-edge);border-radius:10px;
-      box-shadow:var(--shadow);font-family:var(--mono);font-size:12.5px;margin:16px}
+    .paper{background:var(--paper);color:var(--paper-ink);border:1px solid var(--paper-edge);border-radius:10px;min-width:0;
+      box-shadow:var(--shadow);font-family:var(--mono);font-size:12.5px;margin:0 0 16px}
     .paper-h{border-radius:10px 10px 0 0}
-    .paper-h{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--paper-edge)}
+    .paper-h{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);border-bottom:1px solid var(--paper-edge)}
     .paper-h>div{padding:9px 16px;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--paper-dim);
       display:flex;align-items:center;gap:7px}
     .paper-h .r{border-left:1px solid var(--paper-edge)}
@@ -460,7 +470,7 @@ UI_HTML = r"""<!doctype html>
     .fname .fnm{letter-spacing:.04em;text-transform:uppercase;font-weight:600;flex:0 0 auto}
     .fname .fhx{display:flex;align-items:center;gap:6px;margin-left:auto}
     .fname .leadfold{display:flex;align-items:center;gap:6px}
-    .fpair{display:grid;grid-template-columns:1fr 1fr}
+    .fpair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
     .fside{padding:8px 16px;white-space:pre-wrap;word-break:break-word;min-height:34px;line-height:1.55}
     .fside.r{border-left:1px solid var(--paper-edge)}
     .fside.del{background:var(--paper-del);color:var(--paper-del-ink)}
@@ -469,7 +479,7 @@ UI_HTML = r"""<!doctype html>
     /* line-aligned split diff for long multi-line strings (git split view) */
     /* row-aligned split diff: each .drow has a left + right cell; folds are expandable */
     .splitgrid{display:flex;flex-direction:column}
-    .drow{display:grid;grid-template-columns:1fr 1fr}
+    .drow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
     .dcell{display:grid;grid-template-columns:38px 14px 1fr;align-items:baseline;line-height:1.5;font-size:12px;
       border-bottom:1px solid rgba(0,0,0,.04);min-width:0}
     .dcell.r{border-left:1px solid var(--paper-edge)}
@@ -489,7 +499,7 @@ UI_HTML = r"""<!doctype html>
     .fx:hover{color:var(--paper-ink);border-color:var(--paper-dim);background:#fff}
     .nodiff{padding:34px 16px;color:var(--paper-dim);text-align:center;font-family:var(--body);font-size:13px}
     /* impact / system-overview panel (dark, sits above the paper diff) */
-    .impact{margin:0 0 16px;background:var(--panel);border:1px solid var(--edge2);border-radius:12px;overflow:hidden}
+    .impact{margin:0 0 16px;background:var(--panel);border:1px solid var(--edge2);border-radius:12px;overflow:hidden;box-shadow:0 14px 30px rgba(0,0,0,.18)}
     .impact .ih{display:flex;align-items:center;gap:10px;padding:11px 15px;border-bottom:1px solid var(--edge)}
     .impact .ih .tt{font-family:var(--disp);font-weight:600;font-size:13px}
     .impact .ih .sp{flex:1}
@@ -542,8 +552,47 @@ UI_HTML = r"""<!doctype html>
     .modal input:focus,.modal textarea:focus{outline:none;border-color:var(--blue)}
     .modal .f{display:flex;justify-content:flex-end;gap:9px;padding:14px 18px;border-top:1px solid var(--edge)}
 
-    @media (max-width:1080px){ .cols{grid-template-columns:240px 280px 1fr} }
-    @media (max-width:840px){ .cols{grid-template-columns:1fr;grid-auto-rows:minmax(220px,auto)} .pane{border-right:0;border-bottom:1px solid var(--edge)} }
+    @media (max-width:1080px){
+      .cols{grid-template-columns:minmax(220px,230px) minmax(250px,280px) minmax(0,1fr)}
+      #whoTxt{max-width:220px}
+      .ghost{padding-inline:9px}
+    }
+    @media (max-width:960px){
+      .app{height:auto;min-height:100vh;overflow-x:hidden}
+      .top{height:auto;min-height:54px;align-items:center;flex-wrap:wrap;padding:9px 12px;gap:8px}
+      .top .sp{display:none}
+      .brand{flex:0 0 auto}
+      .who{order:1;flex:1 1 calc(100% - 76px)}
+      #whoTxt{max-width:100%}
+      .chip{order:2}
+      .scopebar,.cmdset{order:3;flex:1 1 100%;padding-left:0;border-left:0;flex-wrap:wrap}
+      .envpick,.seg,.ghost{height:32px}
+      .envpick,.seg,.ghost{order:3}
+      .pick{flex:1 1 150px}
+      .envpick{max-width:100%;flex:1 1 130px}
+      .ghost{flex:1 1 72px;padding:5px 8px}
+      .seg{flex:1 1 104px;justify-content:center}
+      .cols{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(240px,34vh) minmax(260px,34vh) minmax(360px,auto);min-height:0}
+      .pane{border-right:0;border-bottom:1px solid var(--edge);min-height:0}
+      .dhead{height:auto;min-height:42px;flex-wrap:wrap;padding:8px 12px}
+      .paperwrap{padding:10px}
+      .paper{font-size:12px}
+      .impact .row .k{min-width:72px}
+    }
+    @media (max-width:560px){
+      body{font-size:13px}
+      .filterbar{overflow:auto;flex-wrap:nowrap;padding-bottom:8px}
+      .fchip{flex:0 0 auto}
+      .node{padding-right:10px}
+      .node .sub{font-size:10px;gap:6px}
+      .paper-h,.fpair,.drow{grid-template-columns:1fr}
+      .paper-h .r,.fside.r,.dcell.r{border-left:0;border-top:1px solid var(--paper-edge)}
+      .paper-h>div{padding:8px 12px}
+      .fside{padding:8px 12px}
+      .dcell{grid-template-columns:30px 14px 1fr}
+      .impact .ib{padding:12px}
+      .modal textarea{min-height:220px}
+    }
     @media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
   </style>
 </head>
@@ -554,15 +603,19 @@ UI_HTML = r"""<!doctype html>
       <div class="who" id="who"><span class="ava" id="ava">·</span><span id="whoTxt">connecting…</span></div>
       <span class="chip open" id="mode"></span>
       <div class="sp"></div>
-      <select class="envpick" id="env" title="environment"><option>dev</option></select>
-      <select class="envpick branchpick" id="branch" title="branch"><option>main</option></select>
-      <button class="ghost" id="newBranch" type="button">Branch</button>
-      <button class="ghost" id="draftCommit" type="button">Draft</button>
-      <button class="ghost" id="branchDiff" type="button">Diff</button>
-      <button class="ghost" id="openPr" type="button">PR</button>
-      <button class="ghost" id="mergePr" type="button">Merge</button>
+      <div class="scopebar">
+        <label class="pick"><span>env</span><select class="envpick" id="env" title="Environment"><option>dev</option></select></label>
+        <label class="pick"><span>branch</span><select class="envpick branchpick" id="branch" title="Branch"><option>main</option></select></label>
+      </div>
+      <div class="cmdset" aria-label="Branch workflow">
+        <button class="ghost" id="newBranch" type="button" title="Create a draft branch">Branch</button>
+        <button class="ghost" id="draftCommit" type="button" title="Commit selected record to the current branch">Draft</button>
+        <button class="ghost" id="branchDiff" type="button" title="Compare current branch with main">Diff</button>
+        <button class="ghost" id="openPr" type="button" title="Open a cfgit PR for the current branch">PR</button>
+        <button class="ghost" id="mergePr" type="button" title="Merge the open cfgit PR">Merge</button>
+      </div>
       <div class="seg" id="theme"><button data-th="dark" class="on">Dark</button><button data-th="light">Light</button></div>
-      <button class="ghost" id="refresh" type="button">Refresh</button>
+      <button class="ghost" id="refresh" type="button" title="Reload state">Refresh</button>
       <input id="configFile" style="display:none">
     </header>
     <div class="cols">
@@ -645,10 +698,15 @@ function renderBranches(){
   sel.innerHTML=names.map(n=>`<option ${n===current?"selected":""}>${esc(n)}</option>`).join("");
   if(names.includes(current))sel.value=current; else sel.value=names[0]||"main";
   const onMain=sel.value==="main";
+  const hasOpenPr=S.prs.some(p=>p.head_branch===sel.value&&p.status==="open");
   $("draftCommit").disabled=onMain||!S.sel;
   $("branchDiff").disabled=onMain;
   $("openPr").disabled=onMain;
-  $("mergePr").disabled=onMain||!S.prs.some(p=>p.head_branch===sel.value&&p.status==="open");
+  $("mergePr").disabled=onMain||!hasOpenPr;
+  $("draftCommit").title=onMain?"Select a draft branch first":(!S.sel?"Select a record first":"Commit selected record to this branch");
+  $("branchDiff").title=onMain?"Select a draft branch to compare with main":"Compare current branch with main";
+  $("openPr").title=onMain?"Select a draft branch first":"Open a cfgit PR for this branch";
+  $("mergePr").title=onMain?"Select a draft branch first":(hasOpenPr?"Merge the open cfgit PR":"No open PR for this branch");
 }
 
 function counts(){const c={all:S.records.length,drift:0,clean:0,new:0};
@@ -798,13 +856,12 @@ async function showDrift(rec){
   markNode(null,true);
   S.diffCtx={a:"=HEAD",b:"=live",left:"recorded",right:"live",empty:"No structural difference (it may be in ignored or secret fields)."};
   $("dTitle").innerHTML=`Drift · recorded <b>@${rec.head_seq??""}</b> → live`;
-  $("dActs").innerHTML=`<button class="btn" id="aImpact">Impact</button> <button class="btn go" id="aAdopt">Adopt</button> <button class="btn warn" id="aRestore">Restore @${rec.head_seq??""}</button>`;
+  $("dActs").innerHTML=`<button class="btn" id="aImpact">Impact</button> <button class="btn go" id="aAdopt">Adopt</button>`;
   $("diff").innerHTML=`<div class="spin">computing diff…</div>`;
   const res=await api("diff",{record:S.sel,a:"=HEAD",b:"=live"});
   renderDiff(res,"recorded","live",S.diffCtx.empty);
   $("aImpact").onclick=()=>showImpact();
   $("aAdopt").onclick=()=>openAdopt(rec);
-  $("aRestore").onclick=()=>openRestore(rec,"@"+(rec.head_seq??""));
   refreshImpactBtn();
 }
 async function showImpact(){
@@ -1029,7 +1086,7 @@ function openCreateBranch(){modal(`<h3>Create branch</h3><div class="b">
   <div><label>Name</label><input id="mName" value="draft-${Date.now().toString(36)}" autocomplete="off"></div>
   <div><label>Message</label><input id="mMsg" value="create draft branch" autocomplete="off"></div></div>
   <div class="f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn go" id="mGo">Create</button></div>`);
-  $("mGo").onclick=async()=>{$("mGo").disabled=true;const r=await api("branch_create",{name:$("mName").value,from_branch:"main",message:$("mMsg").value});afterBranch(r,"Branch created");};}
+  $("mGo").onclick=async()=>{$("mGo").disabled=true;const name=$("mName").value;const r=await api("branch_create",{name,from_branch:"main",message:$("mMsg").value});afterBranch(r,"Branch created",name);};}
 async function openDraftCommit(){
   const br=selectedBranch();
   if(br==="main"){toast("select a non-main branch",true);return;}
@@ -1079,10 +1136,12 @@ function openMergeModal(){
     <div class="f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn warn" id="mGo">Merge</button></div>`);
   $("mGo").onclick=async()=>{$("mGo").disabled=true;const r=await api("pr_merge",{id:$("mPr").value,message:$("mMsg").value||("merge "+br)});after(r,"Merged");};
 }
-async function afterBranch(res,verb){closeModal();
+async function afterBranch(res,verb,nextBranch){closeModal();
   const ok=res&&res.status==="ok";
   toast(ok?verb:(res&&res.message?res.message:verb+" failed"),!ok);
-  await loadState();renderBranches();
+  await loadState();
+  if(ok&&nextBranch&&[...$("branch").options].some(o=>o.value===nextBranch))$("branch").value=nextBranch;
+  renderBranches();
 }
 async function after(res,verb){closeModal();
   const ok=res&&(res.status==="ok"||(res.data&&(res.data.oid||res.data.seq)));
