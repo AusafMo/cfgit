@@ -1,7 +1,7 @@
 [project]
 name = "cfgit-impact"
 version = "0.1.0"
-description = "Optional system-impact analysis plugin for cfgit"
+description = "Optional cfgit plugin for deterministic system-impact summaries and opt-in LLM narration of database record diffs"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

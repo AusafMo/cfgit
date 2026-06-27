@@ -2,8 +2,10 @@
 
 cfgit publishes two Python packages:
 
-- `cfgit`: core library, CLI, adapters, UI, and MCP server entry point.
-- `cfgit-impact`: optional system-impact / LLM narration plugin.
+- `cfgit`: Git-style history, diff, drift detection, branch/PR review, and
+  rollback for live database records without migrating or owning the datastore.
+- `cfgit-impact`: optional plugin for deterministic system-impact summaries and
+  opt-in LLM narration of database record diffs.
 
 Current first release version: `0.1.0`.
 

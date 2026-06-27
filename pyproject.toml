@@ -1,7 +1,7 @@
 [project]
 name = "cfgit"
 version = "0.1.0"
-description = "Non-custodial version control for live datastore records"
+description = "Git-style history, diff, drift detection, and rollback for live database records without migrating or owning your datastore"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -15,6 +15,9 @@ keywords = [
   "postgres",
   "mcp",
   "agents",
+  "rollback",
+  "drift-detection",
+  "database-versioning",
 ]
 
 # Core has NO database driver and NO LLM SDK. That boundary is enforced in CI
