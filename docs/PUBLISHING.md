@@ -2,8 +2,8 @@
 
 cfgit publishes two Python packages:
 
-- `cfg-vcs`: core library, CLI, adapters, UI, and MCP server entry point.
-- `cfg-impact`: optional system-impact / LLM narration plugin.
+- `cfgit`: core library, CLI, adapters, UI, and MCP server entry point.
+- `cfgit-impact`: optional system-impact / LLM narration plugin.
 
 Current first release version: `0.1.0`.
 
@@ -11,14 +11,19 @@ Current first release version: `0.1.0`.
 
 Create both projects on PyPI and configure Trusted Publishing for this repository.
 
-For `cfg-vcs`:
+For `cfgit`:
 
 - Owner: `AusafMo`
 - Repository: `cfgit`
 - Workflow: `publish.yml`
-- Environment: leave blank
+- Environment: `pypi-cfgit`
 
-For `cfg-impact`, use the same trusted publisher settings.
+For `cfgit-impact`:
+
+- Owner: `AusafMo`
+- Repository: `cfgit`
+- Workflow: `publish.yml`
+- Environment: `pypi-cfgit-impact`
 
 The workflow uses PyPI OpenID Connect, so no PyPI API token is stored in GitHub
 Secrets.
@@ -42,8 +47,8 @@ python -m twine check dist/*
 ```bash
 python -m venv /tmp/cfgit-publish-smoke
 /tmp/cfgit-publish-smoke/bin/python -m pip install \
-  'dist/cfg_vcs-0.1.0-py3-none-any.whl[mcp]' \
-  plugins/cfg_impact/dist/cfg_impact-0.1.0-py3-none-any.whl
+  'dist/cfgit-0.1.0-py3-none-any.whl[mcp]' \
+  plugins/cfg_impact/dist/cfgit_impact-0.1.0-py3-none-any.whl
 /tmp/cfgit-publish-smoke/bin/cfg --help
 /tmp/cfgit-publish-smoke/bin/python -c 'import cfg; import cfg.mcp.server; import cfg_impact; print("imports ok")'
 ```
@@ -61,15 +66,15 @@ git push origin v0.1.0
 gh release create v0.1.0 --title "v0.1.0" --notes "First public cfgit release."
 ```
 
-The release triggers `.github/workflows/publish.yml`, which publishes `cfg-vcs`
-first and `cfg-impact` second.
+The release triggers `.github/workflows/publish.yml`, which publishes `cfgit`
+first and `cfgit-impact` second.
 
 ## Install
 
 ```bash
-pip install cfg-vcs
-pip install 'cfg-vcs[mongo]'
-pip install 'cfg-vcs[postgres]'
-pip install 'cfg-vcs[mongo,postgres,mcp]'
-pip install cfg-impact
+pip install cfgit
+pip install 'cfgit[mongo]'
+pip install 'cfgit[postgres]'
+pip install 'cfgit[mongo,postgres,mcp]'
+pip install cfgit-impact
 ```
