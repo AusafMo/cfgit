@@ -884,7 +884,12 @@ async function showImpact(){
   if(llm.enabled){
     const ov=llm.overview||{};
     const parts=[];
-    const asList=v=>Array.isArray(v)?`<ul class="llmul">${v.map(x=>`<li>${typeof x==="object"?esc(JSON.stringify(x)):mdi(x)}</li>`).join("")}</ul>`:mdi(v);
+    const objLine=x=>{
+      const label=x.config_id||x.record_id||x.id||x.name||x.collection||"record";
+      const reason=x.reason||x.summary||x.impact||x.note||"";
+      return `<strong>${esc(label)}</strong>${reason?` — ${mdi(reason)}`:""}`;
+    };
+    const asList=v=>Array.isArray(v)?`<ul class="llmul">${v.map(x=>`<li>${x&&typeof x==="object"?objLine(x):mdi(x)}</li>`).join("")}</ul>`:mdi(v);
     if(ov.summary)parts.push(`<div class="body">${mdi(ov.summary)}</div>`);
     if(ov.behavior_change)parts.push(`<div class="lk"><span class="lkk">behavior</span>${asList(ov.behavior_change)}</div>`);
     if(ov.blast_radius)parts.push(`<div class="lk"><span class="lkk">blast radius</span>${asList(ov.blast_radius)}</div>`);
