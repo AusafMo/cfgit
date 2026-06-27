@@ -7,7 +7,7 @@ cfgit publishes two Python distributions:
 - `cfg-impact`: optional plugin for deterministic system-impact summaries and
   opt-in LLM narration of database record diffs.
 
-Current first release version: `0.1.0`.
+Current release version: `0.1.1`.
 
 ## One-Time PyPI Setup
 
@@ -49,8 +49,8 @@ python -m twine check dist/*
 ```bash
 python -m venv /tmp/cfgit-publish-smoke
 /tmp/cfgit-publish-smoke/bin/python -m pip install \
-  'dist/cfg_vcs-0.1.0-py3-none-any.whl[mcp]' \
-  plugins/cfg_impact/dist/cfg_impact-0.1.0-py3-none-any.whl
+  'dist/cfg_vcs-0.1.1-py3-none-any.whl[mcp]' \
+  plugins/cfg_impact/dist/cfg_impact-0.1.1-py3-none-any.whl
 /tmp/cfgit-publish-smoke/bin/cfg --help
 /tmp/cfgit-publish-smoke/bin/python -c 'import cfg; import cfg.mcp.server; import cfg_impact; print("imports ok")'
 ```
@@ -63,9 +63,9 @@ release from a tag:
 ```bash
 git checkout main
 git pull origin main
-git tag v0.1.0
-git push origin v0.1.0
-gh release create v0.1.0 --title "v0.1.0" --notes "First public cfgit release."
+git tag v0.1.1
+git push origin v0.1.1
+gh release create v0.1.1 --title "v0.1.1" --notes "First public cfgit release under the cfg-vcs and cfg-impact package names."
 ```
 
 The release triggers `.github/workflows/publish.yml`, which publishes `cfg-vcs`

@@ -1,6 +1,6 @@
 [project]
 name = "cfg-vcs"
-version = "0.1.0"
+version = "0.1.1"
 description = "Git-style history, diff, drift detection, and rollback for live database records without migrating or owning your datastore"
 readme = "README.md"
 requires-python = ">=3.11"

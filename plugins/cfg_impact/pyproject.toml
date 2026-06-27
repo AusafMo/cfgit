@@ -1,13 +1,13 @@
 [project]
 name = "cfg-impact"
-version = "0.1.0"
+version = "0.1.1"
 description = "Optional cfg-impact plugin for deterministic system-impact summaries and opt-in LLM narration of database record diffs"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [{ name = "Mohammad Ausaf" }]
 dependencies = [
-  "cfg-vcs>=0.1.0,<0.2.0",
+  "cfg-vcs>=0.1.1,<0.2.0",
   "httpx>=0.27",
 ]
 
