@@ -313,7 +313,7 @@ def impact(
         from cfg_impact.overview import overview
     except ModuleNotFoundError as exc:
         raise ValueError(
-            "cfgit-impact plugin is not installed. Install plugins/cfg_impact or cfgit[impact]."
+            "cfg-impact plugin is not installed. Install plugins/cfg_impact or cfg-impact."
         ) from exc
     return (
         overview(engine, record, a=a, b=b, use_llm=use_llm, provider=provider, model=model, against=against),

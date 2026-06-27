@@ -1,5 +1,5 @@
 [project]
-name = "cfgit"
+name = "cfg-vcs"
 version = "0.1.0"
 description = "Git-style history, diff, drift detection, and rollback for live database records without migrating or owning your datastore"
 readme = "README.md"
@@ -32,7 +32,7 @@ mongo = ["pymongo>=4.6"]
 postgres = ["psycopg[binary]>=3.2"]
 cli = ["click>=8.1", "rich>=13.0"]
 mcp = ["mcp>=1.0"]
-impact = []   # the cfgit-impact plugin declares its own model-client deps; never in core
+impact = []   # the cfg-impact plugin declares its own model-client deps; never in core
 dev = ["pytest>=8.0", "pytest-asyncio", "ruff", "mypy", "httpx>=0.27"]
 
 [project.urls]
