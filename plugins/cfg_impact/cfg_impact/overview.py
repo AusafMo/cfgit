@@ -422,9 +422,12 @@ def _parse_jsonish(text: str) -> dict[str, Any] | None:
     if not raw:
         return None
     if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json"):
-            raw = raw[4:]
+        raw = raw[3:].strip()
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+        fence_end = raw.rfind("```")
+        if fence_end != -1:
+            raw = raw[:fence_end].strip()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

@@ -122,6 +122,16 @@ def test_impact_payload_includes_actual_field_diff_values() -> None:
     assert "changes" not in payload
 
 
+def test_parse_jsonish_strips_fenced_json() -> None:
+    sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
+    try:
+        from cfg_impact.overview import _parse_jsonish
+    finally:
+        sys.path.pop(0)
+
+    assert _parse_jsonish('```json\n{"summary":"ok"}\n```') == {"summary": "ok"}
+
+
 def test_changed_string_values_reads_before_after_keys() -> None:
     sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
     try:

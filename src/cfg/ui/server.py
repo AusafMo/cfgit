@@ -5,6 +5,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import socket
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -107,6 +108,11 @@ class CfgUIHandler(BaseHTTPRequestHandler):
                         for item in project.collections
                     ],
                     "connections": actions.to_json(project.connections),
+                    "impact": {
+                        "provider": os.getenv("CFGIT_UI_IMPACT_PROVIDER")
+                        or project.connections.ai_provider,
+                        "model": os.getenv("CFGIT_UI_IMPACT_MODEL") or None,
+                    },
                 },
             }
         except Exception as exc:
@@ -641,7 +647,7 @@ UI_HTML = r"""<!doctype html>
   <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
 
 <script>
-const S={records:[],recent:[],branches:[],prs:[],filter:"all",q:"",sel:null,against:new Set(),hist:[],who:null,open:{}};
+const S={records:[],recent:[],branches:[],prs:[],filter:"all",q:"",sel:null,against:new Set(),hist:[],who:null,open:{},impact:{}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 // inline markdown for LLM narration: escape first (XSS-safe), then render the small
@@ -678,6 +684,7 @@ async function loadState(){
   const sc=await fetch("/api/schema?"+qs()).then(r=>r.json()).catch(()=>null);
   if(sc&&sc.data&&Array.isArray(sc.data.envs)&&sc.data.envs.length){
     const cur=$("env").value; $("env").innerHTML=sc.data.envs.map(e=>`<option ${e===cur?"selected":""}>${esc(e)}</option>`).join("");}
+  if(sc&&sc.data&&sc.data.impact)S.impact=sc.data.impact;
   S.records=(st.data&&st.data.status)?st.data.status:[];
   S.recent=(st.data&&st.data.recent_history)?st.data.recent_history:[];
   S.branches=(st.data&&st.data.branches)?st.data.branches:[];
@@ -869,6 +876,8 @@ async function showImpact(){
   const against=[...S.against].filter(k=>k!==S.sel);
   const btn=$("aImpact"); if(btn){btn.disabled=true;btn.textContent="Analyzing…";}
   const payload={record:S.sel,a:S.diffCtx.a,b:S.diffCtx.b,use_llm:true};
+  if(S.impact&&S.impact.provider)payload.provider=S.impact.provider;
+  if(S.impact&&S.impact.model)payload.model=S.impact.model;
   if(against.length)payload.against=against;
   const r=await api("impact",payload);
   if(btn){btn.disabled=false;}
@@ -1119,11 +1128,35 @@ async function showBranchDiff(){
   $("dTitle").innerHTML=`Branch diff · <b>main..${esc(br)}</b>`;
   $("dActs").innerHTML="";
   if(!rows.length){$("diff").innerHTML=`<div class="paper"><div class="nodiff">No draft changes on this branch.</div></div>`;return;}
-  $("diff").innerHTML=`<div class="paper doconly"><div class="paper-h"><div>branch draft changes</div></div><div class="docbody">${esc(JSON.stringify(rows,null,2))}</div></div>`;
+  if(rows.length===1){
+    const row=rows[0];
+    const rec=`${row.collection}:${row.record_id}`;
+    $("dTitle").innerHTML=`Branch diff · <b>main..${esc(br)}</b> · ${esc(rec)}`;
+    renderDiff({data:{changes:row.changes||[]}},"main",br,"No field-level draft changes.");
+    return;
+  }
+  const cards=rows.map(row=>`<div class="frow"><div class="fname">${esc(row.collection+":"+row.record_id)}</div>
+    <div class="docbody">${esc(JSON.stringify(row.changes||[],null,2))}</div></div>`).join("");
+  $("diff").innerHTML=`<div class="paper doconly"><div class="paper-h"><div>branch draft changes</div></div>${cards}</div>`;
 }
 function openPrModal(){
   const br=selectedBranch();
   if(br==="main"){toast("select a non-main branch",true);return;}
+  const prs=S.prs.filter(p=>p.head_branch===br&&p.status==="open");
+  if(prs.length){
+    const body=prs.map(p=>`<div class="desc">
+      <b>${esc(p.id)}</b><br>
+      ${esc(p.message||"review draft")}<br>
+      <span class="mono">${esc(p.base_branch||"main")} ← ${esc(p.head_branch||br)}</span><br>
+      ${(p.records||[]).map(r=>`<span class="cat">${esc(r.collection+":"+r.record_id)}</span>`).join(" ")}
+    </div>`).join("");
+    modal(`<h3>Open PR</h3><div class="b">
+      ${body}
+      <div class="desc">This is review metadata in cfgit's sidecar store. Runtime remains unchanged until the separate merge action.</div>
+    </div>
+    <div class="f"><button class="btn go" onclick="closeModal()">Close</button></div>`);
+    return;
+  }
   modal(`<h3>Open PR</h3><div class="b">
       <div class="desc">Open a review object for <b>${esc(br)}</b>. Runtime is unchanged until merge.</div>
     <div><label>Message</label><input id="mMsg" value="merge ${esc(br)}" autocomplete="off"></div></div>
