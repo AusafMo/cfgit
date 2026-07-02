@@ -49,10 +49,10 @@ class BaseImpactProvider(ABC):
                     "upstream/downstream roles, overlapping responsibilities), naming the specific "
                     "config_ids. Do NOT say 'impact unknown' when the diff is present, read it. Only list a "
                     "genuine unknown if it truly cannot be inferred from the provided data.\n"
-                    "Return concise JSON with keys: summary (one concrete sentence), behavior_change (what "
-                    "the agent will now do differently, specifically), blast_radius (which named configs or "
-                    "consumers are affected and why), risk_level (low|medium|high), rollback_note, unknowns "
-                    "(array of only real unknowns)."
+                    "Return terse JSON with keys: summary (one concrete sentence), behavior_change (one "
+                    "short sentence), blast_radius (one short sentence naming affected configs), risk_level "
+                    "(low|medium|high), rollback_note (one short sentence), unknowns (array of only real "
+                    "unknowns). Return raw JSON only; do not wrap it in Markdown or code fences."
                 ),
             },
             {"role": "user", "content": json_dumps(payload)},

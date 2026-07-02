@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from typing import Any
 
@@ -106,7 +107,7 @@ async def overview_with_optional_llm(
         payload,
         json_dumps=lambda payload: json.dumps(payload, indent=2, sort_keys=True),
         temperature=0.1,
-        max_tokens=1100,
+        max_tokens=4096,
     )
     parsed = _parse_jsonish(result.get("content", ""))
     overview_data["llm"] = {
@@ -431,5 +432,19 @@ def _parse_jsonish(text: str) -> dict[str, Any] | None:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return None
+        return _parse_partial_json_fields(raw)
     return data if isinstance(data, dict) else None
+
+
+def _parse_partial_json_fields(raw: str) -> dict[str, Any] | None:
+    parsed: dict[str, Any] = {}
+    for key in ("summary", "behavior_change", "blast_radius", "risk_level", "rollback_note"):
+        match = re.search(rf'"{key}"\s*:\s*"((?:\\.|[^"\\])*)"', raw, flags=re.DOTALL)
+        if match:
+            try:
+                parsed[key] = json.loads(f'"{match.group(1)}"')
+            except json.JSONDecodeError:
+                parsed[key] = match.group(1)
+    if '"unknowns"' in raw:
+        parsed.setdefault("unknowns", [])
+    return parsed or None

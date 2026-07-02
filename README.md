@@ -103,25 +103,39 @@ system, or schema migration tool.
 
 ## Install
 
-From a checkout:
+From PyPI:
+
+- [`cfgit`](https://pypi.org/project/cfgit/)
+- [`cfgit-impact`](https://pypi.org/project/cfgit-impact/) for optional impact narration
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[mongo,postgres,mcp,dev]'
-pip install -e plugins/cfg_impact
+pip install 'cfgit[mongo,postgres,mcp]'
 ```
 
 Minimal install for Mongo only:
 
 ```bash
-pip install -e '.[mongo]'
+pip install 'cfgit[mongo]'
 ```
 
 Minimal install for Postgres only:
 
 ```bash
-pip install -e '.[postgres]'
+pip install 'cfgit[postgres]'
+```
+
+Optional impact plugin:
+
+```bash
+pip install cfgit-impact
+```
+
+If you use `pipx`, install cfgit first and inject the optional plugin into the
+same isolated environment:
+
+```bash
+pipx install 'cfgit[mongo,postgres,mcp]'
+pipx inject cfgit cfgit-impact
 ```
 
 ## Quick start
@@ -453,7 +467,7 @@ explains in plain language what the change does, what it ripples into, and how t
 roll it back:
 
 ```bash
-pip install -e plugins/cfg_impact
+pip install cfgit-impact
 cfg impact agent_configs:agent_planner --llm --json
 ```
 
@@ -526,10 +540,7 @@ against a safe environment.
 - [docs/AGENTS.md](docs/AGENTS.md): MCP, skill, and impact plugin usage
 - [docs/SPEC_CORE.md](docs/SPEC_CORE.md): project framing and v1 scope
 - [docs/SPEC.md](docs/SPEC.md): deeper engine reference
-- [docs/README.md](docs/README.md): full documentation index, including archived project notes and historical specs
-- [docs/project-notes/findings.md](docs/project-notes/findings.md): implementation findings from the origin build
-- [docs/project-notes/handoff.md](docs/project-notes/handoff.md): archived handoff notes
-- [docs/archive/spec-v0.1.md](docs/archive/spec-v0.1.md): original historical spec
+- [docs/README.md](docs/README.md): full documentation index
 
 ## Development
 

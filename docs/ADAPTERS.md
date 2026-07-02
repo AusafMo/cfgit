@@ -8,7 +8,7 @@ details. Core owns hashing, history semantics, drift detection, and restore logi
 Install:
 
 ```bash
-pip install -e '.[mongo]'
+pip install 'cfgit[mongo]'
 ```
 
 Configuration:
@@ -45,7 +45,7 @@ Mongo notes:
 Install:
 
 ```bash
-pip install -e '.[postgres]'
+pip install 'cfgit[postgres]'
 ```
 
 Configuration:

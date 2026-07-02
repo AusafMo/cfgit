@@ -54,7 +54,7 @@ tokens through MCP unless that client/session is trusted for secrets.
 Install the MCP extra:
 
 ```bash
-pip install -e '.[mcp]'
+pip install 'cfgit[mcp]'
 ```
 
 Run:
@@ -120,7 +120,7 @@ as token/DB-principal based rather than author-string based.
 Install:
 
 ```bash
-pip install -e plugins/cfg_impact
+pip install cfgit-impact
 ```
 
 Deterministic impact:
