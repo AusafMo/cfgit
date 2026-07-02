@@ -189,7 +189,7 @@ writers = ["alice@*", "bob@*", "carol@*"]
 admin_actions = ["init", "restore_system"]
 ```
 
-> **First-task gate (archived in `docs/project-notes/handoff.md`):** before building, pin each collection's real id + live-rule against the actual data. `modelgarden_models` already has duplicate `model_id` values in local dev data, while `model_path` is unique and runtime-authoritative in the code paths checked. Use `model_path` unless production data proves otherwise. Getting this wrong makes the tool wrong on day one.
+> **First-task gate for any real deployment:** before tracking a collection, pin the stable id field and live-record rule against actual data. If multiple rows or documents can share the apparent id, configure a different id field or an explicit `live_when` selector before importing history. Getting this wrong makes the tool wrong on day one.
 
 ---
 

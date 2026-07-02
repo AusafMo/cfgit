@@ -116,6 +116,15 @@ activemq-data/
 .cfg/
 /.cfg.toml
 
+# Local project notes and recording drafts
+docs/project-notes/
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.avi
+*.m4v
+
 # Local secrets and overrides
 *.local
 .streamlit/secrets.toml

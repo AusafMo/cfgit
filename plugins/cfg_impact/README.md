@@ -4,6 +4,25 @@ Optional system-impact analysis for cfgit.
 
 This package is deliberately outside `src/cfg/core/`. The cfgit core stays LLM-free and provider-free; this plugin owns both deterministic impact analysis and optional LLM narration.
 
+## Install
+
+Install cfgit with the database extras you use, then install the optional impact
+plugin from PyPI into the same Python environment:
+
+- [`cfgit-impact`](https://pypi.org/project/cfgit-impact/)
+
+```bash
+pip install 'cfgit[mongo,postgres,mcp]'
+pip install cfgit-impact
+```
+
+For `pipx` installs:
+
+```bash
+pipx install 'cfgit[mongo,postgres,mcp]'
+pipx inject cfgit cfgit-impact
+```
+
 ## Boundary
 
 - `src/cfg/core/` never imports this plugin.
