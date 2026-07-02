@@ -132,6 +132,32 @@ def test_parse_jsonish_strips_fenced_json() -> None:
     assert _parse_jsonish('```json\n{"summary":"ok"}\n```') == {"summary": "ok"}
 
 
+def test_parse_jsonish_recovers_partial_json_fields() -> None:
+    sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
+    try:
+        from cfg_impact.overview import _parse_jsonish
+    finally:
+        sys.path.pop(0)
+
+    broken = (
+        '{"summary":"Refund agent now expands courtesy credits.",'
+        '"behavior_change":"Approves larger refunds.",'
+        '"blast_radius":"Affects refund_resolution and support_orchestrator.",'
+        '"risk_level":"high",'
+        '"rollback_note":"Restore the previous refund policy.",'
+        '"unknowns":["truncated"'
+    )
+
+    assert _parse_jsonish(broken) == {
+        "summary": "Refund agent now expands courtesy credits.",
+        "behavior_change": "Approves larger refunds.",
+        "blast_radius": "Affects refund_resolution and support_orchestrator.",
+        "risk_level": "high",
+        "rollback_note": "Restore the previous refund policy.",
+        "unknowns": [],
+    }
+
+
 def test_changed_string_values_reads_before_after_keys() -> None:
     sys.path.insert(0, str(ROOT / "plugins" / "cfg_impact"))
     try:
