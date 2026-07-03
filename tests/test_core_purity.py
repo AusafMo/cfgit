@@ -34,3 +34,13 @@ def test_first_party_runtime_packages_have_no_driver_or_llm_sdk() -> None:
         "cfg runtime packages outside adapters must not import DB drivers or LLM SDKs. Offenders:\n"
         + "\n".join(offenders)
     )
+
+
+def test_core_does_not_import_optional_plugins() -> None:
+    offenders: list[str] = []
+    for path in (CFG / "core").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for forbidden in ("cfg_impact", "cfg_agent"):
+            if forbidden in text:
+                offenders.append(f"{path.relative_to(CFG.parent)} imports {forbidden}")
+    assert offenders == []

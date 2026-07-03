@@ -67,6 +67,7 @@ cfgit is pre-1.0 software. The current implementation includes:
 - MCP server
 - portable Codex or Claude Code skill
 - optional `cfgit-impact` plugin for deterministic impact summaries and opt-in LLM narration
+- optional `cfgit-agent` plugin for multi-agent coordination over shared live database records
 
 The engine is intentionally DB-neutral. Mongo and Postgres are the first two
 adapters to prove the storage seam.
@@ -129,6 +130,34 @@ Optional impact plugin:
 ```bash
 pip install cfgit-impact
 ```
+
+Agent coordination plugin is currently in-repo development, not published to
+PyPI yet:
+
+```bash
+pip install -e plugins/cfg_agent
+```
+
+Enable it per project when you want multi-agent coordination state:
+
+```toml
+[agent]
+enabled = true
+state_backend = "auto" # memory, auto, mongo, or postgres
+state_collection = "cfgit_agent_state"
+events_collection = "cfgit_agent_events"
+default_lease_ttl_seconds = 900
+
+[agent.policies]
+deny_paths = ["/provider_config*"]
+review_paths = ["/rollout*", "/pricing*"]
+require_claims = true
+```
+
+When an agent patch touches `review_paths`, `cfgit-agent` validates the patch,
+creates a cfgit draft branch, opens a cfgit PR, and returns
+`state = "review_requested"` without mutating runtime. The human merge path
+remains the only runtime mutation for those changes.
 
 If you use `pipx`, install cfgit first and inject the optional plugin into the
 same isolated environment:
@@ -358,7 +387,9 @@ surfaces live drift and the latest cfgit commits across all configured records,
 so you can see what changed recently without opening records one by one. It can
 run status, diff, impact, commit, branch draft commits, PR open and merge, log,
 show, adopt, restore, tag, init, import, and fsck, and ships dark and light
-themes.
+themes. When `cfgit-agent` is installed and `[agent]` is enabled, the UI also
+shows live agent sessions, claims, intents, conflicts, and events, with safe
+manager actions for stale coordination state.
 
 By default it binds to `127.0.0.1:8765` and tries the next free ports if needed:
 

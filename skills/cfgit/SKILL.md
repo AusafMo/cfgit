@@ -13,6 +13,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Never use cross-project Mongo URIs for writes. Remote managed Mongo writes are forbidden unless the user explicitly grants a per-turn exception and asks for that exact target.
 - Treat `changed_outside_cfgit` as the central state. Do not commit over it. Run `cfg diff`, explain what changed, then `cfg adopt` if the user wants to fold that live state into history.
 - If `[branches] enabled = true`, draft risky changes on a non-main branch and open a cfgit PR. Branch commits and PR creation do not mutate runtime; `cfg pr merge` is the only branch command that does.
+- If `cfgit-agent` is installed and `[agent] enabled = true`, use the `cfg_agent_*` MCP tools before mutation: start a session, claim the narrowest resource/path, open an intent, validate the JSON Patch, then apply it through cfgit. Do not raw-write the database from an agent session.
 - Prefer `--json` for agent parsing.
 - Use deterministic `cfg impact` first. Add `--llm` only when the user asks for LLM narration and the impact plugin is installed. Use `--against <collection:id>` when the user wants narration scoped to specific related records instead of the whole system.
 - Before the FIRST `cfg import` against a new database or `.cfg.toml`, run `cfg doctor` (read-only). It reports every secret-deny match, oversized field, and key issue at once, with paste-ready `secret_fields`/`ignore_fields` snippets. Fix `.cfg.toml` from its output, then import. This avoids import failing one secret at a time.
@@ -64,6 +65,17 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - `cfg pr create --base main --head <name> -m "<message>" --json`
    - `cfg pr merge <pr-id> --json` only after review. If merge returns `stale` or `changed_outside_cfgit`, do not retry blindly; inspect current main/live drift first.
 
+7. Multi-agent coordination when `cfgit-agent` is enabled.
+   - `cfg_agent_start_session(task, agent_id, config_file, env)`
+   - `cfg_agent_claim(session_id, "collection:id:/json/path", config_file, env)`
+   - `cfg_agent_open_intent(session_id, resources, summary, planned_paths, expected_base, config_file, env)`
+   - `cfg_agent_validate_patch(session_id, record, patch, intent_id, config_file, env)`
+   - `cfg_agent_apply_patch(session_id, record, patch, intent_id, message, idempotency_key, config_file, env)`
+   - `cfg_agent_end_session(session_id, status, summary, config_file, env)`
+   - Claim fields, not whole records, when another agent could safely work on sibling paths.
+   - If apply returns `state="review_requested"`, do not expect live runtime to change. A cfgit branch/PR was opened for human merge.
+   - If a claim, policy, base, or live-drift conflict is returned, surface it and stop; do not bypass with raw DB writes.
+
 ## MCP Tools
 
 If the cfgit MCP server is available, prefer its tools over shelling out:
@@ -94,6 +106,21 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_whoami`
 - `cfg_init`
 - `cfg_identity_hash` for setup only. Prefer the local CLI for real tokens because MCP clients may log tool inputs.
+
+If the optional `cfgit-agent` MCP server is installed, it also exposes:
+
+- `cfg_agent_start_session`
+- `cfg_agent_heartbeat`
+- `cfg_agent_end_session`
+- `cfg_agent_claim`
+- `cfg_agent_release`
+- `cfg_agent_open_intent`
+- `cfg_agent_close_intent`
+- `cfg_agent_validate_patch`
+- `cfg_agent_apply_patch`
+- `cfg_agent_status`
+- `cfg_agent_conflicts`
+- `cfg_agent_watch`
 
 Every MCP tool returns the same envelope shape as the CLI exit status: `status`, `code`, `message`, `data`.
 For MCP bulk commits, pass `items` as structured JSON (`[{record, doc}]`) when the client supports it; use a JSON string only when the client cannot send nested objects cleanly.

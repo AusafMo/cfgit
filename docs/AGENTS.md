@@ -157,3 +157,61 @@ Supported providers:
 The impact engine calls a provider-agnostic `narrate()` or `complete()` method.
 Provider selection is done by `cfg_impact.providers.factory.ImpactProviderFactory`.
 No vendor provider code lives in `src/cfg/core`.
+
+## Agent coordination plugin
+
+`cfgit-agent` is an optional package for multi-agent coordination over shared
+live database records. It keeps cfgit core lightweight while adding agent-first
+sessions, leases, intents, idempotency, conflicts, and event feeds.
+
+It is currently in-repo development, not published to PyPI yet:
+
+```bash
+pip install -e plugins/cfg_agent
+```
+
+Current implementation slice:
+
+- package scaffold
+- in-memory state adapter
+- Mongo and Postgres state adapters
+- plugin-local `[agent]` config loader
+- resource/path overlap checks
+- sessions
+- field/record/collection leases
+- intents
+- idempotency records
+- structured conflicts
+- deterministic claim/path policies
+- branch/PR routing for review-required paths
+- JSON Patch validation against cfgit HEAD/live state
+- safe patch application through cfgit core
+- MCP wrappers
+
+The current apply path goes through cfgit core's normal commit/apply safety
+checks rather than writing the database directly. Agent state is opt-in; if
+`[agent].enabled = true`, use `state_backend = "auto"` to store sessions, leases,
+intents, conflicts, idempotency, and events beside cfgit history.
+If `[agent.policies].review_paths` matches a patch path, `apply_patch` does not
+mutate runtime; it creates a cfgit branch draft commit, opens a cfgit PR, links
+the PR to the agent session/intent, and returns `review_requested`.
+The localhost UI includes an agent manager view for enabled projects, so humans
+can inspect active sessions, claims, intents, conflicts, and events without
+tailing MCP logs.
+
+Minimal config:
+
+```toml
+[agent]
+enabled = true
+state_backend = "auto"
+state_collection = "cfgit_agent_state"
+events_collection = "cfgit_agent_events"
+
+[agent.policies]
+deny_paths = ["/provider_config*"]
+review_paths = ["/rollout*", "/pricing*"]
+require_claims = true
+```
+
+See [AGENT_COORDINATION_SPEC.md](AGENT_COORDINATION_SPEC.md).
