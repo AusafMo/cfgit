@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from urllib.parse import urlparse
 
@@ -69,6 +69,124 @@ def test_non_overlapping_field_claims_can_run_in_parallel() -> None:
     assert left_lease["status"] == "active"
     assert right_lease["status"] == "active"
     assert coordinator.conflicts() == []
+
+
+def test_release_requires_lease_owner() -> None:
+    from cfg_agent import AgentCoordinator, AgentStateError, InMemoryAgentStateAdapter
+
+    coordinator = AgentCoordinator(InMemoryAgentStateAdapter())
+    owner = coordinator.start_session(task="instructions", agent_id="agent.owner")
+    other = coordinator.start_session(task="other", agent_id="agent.other")
+
+    lease = coordinator.claim(
+        session_id=owner["session_id"],
+        resource="agent_configs:refund_resolution:/instructions",
+        reason="copy edit",
+    )
+
+    with pytest.raises(AgentStateError) as raised:
+        coordinator.release(session_id=other["session_id"], lease_id=lease["lease_id"])
+
+    assert raised.value.code == "lease_not_owned"
+    assert coordinator.adapter.get_lease(lease["lease_id"])["status"] == "active"
+
+
+def test_renew_expired_lease_is_blocked() -> None:
+    from cfg_agent import AgentCoordinator, AgentStateError, InMemoryAgentStateAdapter
+
+    adapter = InMemoryAgentStateAdapter()
+    coordinator = AgentCoordinator(adapter)
+    session = coordinator.start_session(task="short lease", agent_id="agent.a")
+
+    lease = coordinator.claim(
+        session_id=session["session_id"],
+        resource="agent_configs:refund_resolution:/instructions",
+        ttl_seconds=1,
+    )
+
+    with pytest.raises(AgentStateError) as raised:
+        adapter.renew_lease(
+            lease["lease_id"],
+            ttl_seconds=10,
+            now=datetime.now(timezone.utc) + timedelta(seconds=2),
+        )
+
+    assert raised.value.code == "lease_expired"
+    assert adapter.get_lease(lease["lease_id"])["status"] == "expired"
+
+
+def test_mongo_renew_lease_uses_conditional_update_without_upsert() -> None:
+    pytest.importorskip("pymongo")
+    from cfg_agent.adapters.mongo import MongoAgentStateAdapter
+
+    now = datetime(2026, 7, 4, tzinfo=timezone.utc)
+    fake_state = _FakeMongoAgentState(
+        {
+            "env": "dev",
+            "kind": "lease",
+            "id": "lea_1",
+            "lease_id": "lea_1",
+            "session_id": "ses_1",
+            "resource": "demo:alpha:/value",
+            "status": "active",
+            "expires_at": "2026-07-04T00:10:00Z",
+        }
+    )
+    adapter = object.__new__(MongoAgentStateAdapter)
+    adapter.env_name = "dev"
+    adapter.state = fake_state
+
+    renewed = adapter.renew_lease("lea_1", ttl_seconds=60, now=now)
+
+    assert renewed["status"] == "active"
+    assert fake_state.find_one_and_update_calls[0]["query"] == {
+        "env": "dev",
+        "kind": "lease",
+        "id": "lea_1",
+        "status": "active",
+        "expires_at": {"$gt": "2026-07-04T00:00:00Z"},
+    }
+    assert "upsert" not in fake_state.find_one_and_update_calls[0]["kwargs"]
+    assert fake_state.replace_one_calls == []
+
+
+def test_mongo_renew_lease_marks_expired_without_replacing() -> None:
+    pytest.importorskip("pymongo")
+    from cfg_agent import AgentStateError
+    from cfg_agent.adapters.mongo import MongoAgentStateAdapter
+
+    now = datetime(2026, 7, 4, tzinfo=timezone.utc)
+    fake_state = _FakeMongoAgentState(
+        {
+            "env": "dev",
+            "kind": "lease",
+            "id": "lea_1",
+            "lease_id": "lea_1",
+            "session_id": "ses_1",
+            "resource": "demo:alpha:/value",
+            "status": "active",
+            "expires_at": "2026-07-03T23:59:59Z",
+        }
+    )
+    adapter = object.__new__(MongoAgentStateAdapter)
+    adapter.env_name = "dev"
+    adapter.state = fake_state
+
+    with pytest.raises(AgentStateError) as raised:
+        adapter.renew_lease("lea_1", ttl_seconds=60, now=now)
+
+    assert raised.value.code == "lease_expired"
+    assert fake_state.doc["status"] == "expired"
+    assert fake_state.replace_one_calls == []
+
+
+def test_mongo_unknown_commit_is_not_retried_as_whole_transaction() -> None:
+    pytest.importorskip("pymongo")
+    from cfg_agent.adapters.mongo import _retryable_transaction_error
+
+    assert not _retryable_transaction_error(_MongoLabelError("UnknownTransactionCommitResult"))
+    assert _retryable_transaction_error(_MongoLabelError("TransientTransactionError"))
+    assert _retryable_transaction_error(_MongoLabelError("WriteConflict"))
 
 
 def test_overlapping_claim_creates_structured_conflict() -> None:
@@ -899,6 +1017,58 @@ def _exercise_agent_state_adapter(adapter) -> None:
     assert replay["replay"] is True
     assert coordinator.status()["sessions"][0]["status"] == "running"
     assert coordinator.watch()[-1]["event"] == "conflict.detected"
+
+
+class _FakeMongoAgentState:
+    def __init__(self, doc: dict):
+        self.doc = dict(doc)
+        self.find_one_and_update_calls: list[dict] = []
+        self.replace_one_calls: list[dict] = []
+
+    def find_one_and_update(self, query: dict, update: dict, **kwargs):
+        self.find_one_and_update_calls.append({"query": query, "update": update, "kwargs": kwargs})
+        if self._matches(query):
+            self.doc.update(update.get("$set", {}))
+            return dict(self.doc)
+        return None
+
+    def find_one(self, query: dict, session=None):
+        if self._matches(query):
+            return dict(self.doc)
+        return None
+
+    def update_one(self, query: dict, update: dict, session=None):
+        if self._matches(query):
+            self.doc.update(update.get("$set", {}))
+        return None
+
+    def replace_one(self, *args, **kwargs):
+        self.replace_one_calls.append({"args": args, "kwargs": kwargs})
+        return None
+
+    def _matches(self, query: dict) -> bool:
+        for key, expected in query.items():
+            actual = self.doc.get(key)
+            if isinstance(expected, dict):
+                gt = expected.get("$gt")
+                if gt is not None and not (actual > gt):
+                    return False
+                lte = expected.get("$lte")
+                if lte is not None and not (actual <= lte):
+                    return False
+                continue
+            if actual != expected:
+                return False
+        return True
+
+
+class _MongoLabelError(Exception):
+    def __init__(self, label: str):
+        super().__init__(label)
+        self.label = label
+
+    def has_error_label(self, label: str) -> bool:
+        return self.label == label
 
 
 def _is_local_uri(uri: str) -> bool:

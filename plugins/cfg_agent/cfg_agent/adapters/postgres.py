@@ -7,7 +7,7 @@ from typing import Any
 
 from cfg.core.config import ProjectConfig
 from cfg_agent.resources import parse_resource, resources_overlap
-from cfg_agent.state import AgentStateError, IdempotencyResult, _iso, utcnow
+from cfg_agent.state import AgentStateError, IdempotencyResult, _iso, _parse_time, utcnow
 
 try:  # pragma: no cover - exercised when cfgit[postgres] is installed
     import psycopg
@@ -129,6 +129,10 @@ class PostgresAgentStateAdapter:
         lease = self._require("lease", lease_id, "lease_not_found")
         if lease.get("status") != "active":
             raise AgentStateError("lease_not_active", "lease is not active", {"lease_id": lease_id})
+        if _parse_time(lease["expires_at"]) <= now:
+            lease["status"] = "expired"
+            self._put_state("lease", lease_id, lease)
+            raise AgentStateError("lease_expired", "lease has expired", {"lease_id": lease_id})
         lease["expires_at"] = _iso(now + timedelta(seconds=ttl_seconds))
         return self._put_state("lease", lease_id, lease)
 
@@ -138,6 +142,9 @@ class PostgresAgentStateAdapter:
             lease["status"] = "released"
             lease["released_at"] = _iso(now)
         return self._put_state("lease", lease_id, lease)
+
+    def get_lease(self, lease_id: str) -> dict[str, Any] | None:
+        return self._get_state("lease", lease_id)
 
     def list_leases(self, *, active_only: bool = True, now: datetime | None = None) -> list[dict[str, Any]]:
         self._expire_leases(now or utcnow())
@@ -159,27 +166,30 @@ class PostgresAgentStateAdapter:
         return self._list_state("intent", status=status, sort_field="created_at")
 
     def remember_idempotency(self, key: str, payload_hash: str, result: dict[str, Any], now: datetime) -> IdempotencyResult:
+        doc = {
+            "kind": "idempotency",
+            "idempotency_key": key,
+            "payload_hash": payload_hash,
+            "result": deepcopy(result),
+            "created_at": _iso(now),
+        }
+        inserted = self._insert_state_once("idempotency", key, doc)
+        if inserted:
+            return IdempotencyResult(replay=False, result=None)
         existing = self._get_state("idempotency", key)
-        if existing:
-            if existing.get("payload_hash") != payload_hash:
-                raise AgentStateError(
-                    "idempotency_conflict",
-                    "idempotency key was already used with a different payload",
-                    {"key": key},
-                )
-            return IdempotencyResult(replay=True, result=deepcopy(existing.get("result")))
-        self._insert_state(
-            "idempotency",
-            key,
-            {
-                "kind": "idempotency",
-                "idempotency_key": key,
-                "payload_hash": payload_hash,
-                "result": deepcopy(result),
-                "created_at": _iso(now),
-            },
-        )
-        return IdempotencyResult(replay=False, result=None)
+        if existing is None:
+            raise AgentStateError(
+                "idempotency_race",
+                "idempotency key was concurrently inserted but could not be read",
+                {"key": key},
+            )
+        if existing.get("payload_hash") != payload_hash:
+            raise AgentStateError(
+                "idempotency_conflict",
+                "idempotency key was already used with a different payload",
+                {"key": key},
+            )
+        return IdempotencyResult(replay=True, result=deepcopy(existing.get("result")))
 
     def get_idempotency(self, key: str) -> dict[str, Any] | None:
         return self._get_state("idempotency", key)
@@ -234,9 +244,24 @@ class PostgresAgentStateAdapter:
         return deepcopy(rows[-limit:])
 
     def _insert_state(self, kind: str, item_id: str, doc: dict[str, Any]) -> dict[str, Any]:
-        if self._get_state(kind, item_id) is not None:
+        if not self._insert_state_once(kind, item_id, doc):
             raise AgentStateError("state_conflict", f"{kind} already exists", {"id": item_id})
-        return self._put_state(kind, item_id, doc)
+        return deepcopy(doc)
+
+    def _insert_state_once(self, kind: str, item_id: str, doc: dict[str, Any]) -> bool:
+        item = deepcopy(doc)
+        status = item.get("status")
+        resource = item.get("resource")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {self.state_table} (env, kind, id, status, resource, updated_at, doc)
+                VALUES (%s, %s, %s, %s, %s, now(), %s)
+                ON CONFLICT (env, kind, id) DO NOTHING
+                """,
+                [self.env_name, kind, item_id, status, resource, Jsonb(_jsonable(item))],
+            )
+            return cur.rowcount == 1
 
     def _put_state(self, kind: str, item_id: str, doc: dict[str, Any]) -> dict[str, Any]:
         item = deepcopy(doc)
@@ -287,9 +312,8 @@ class PostgresAgentStateAdapter:
             return [dict(row["doc"]) for row in cur.fetchall()]
 
     def _expire_leases(self, now: datetime) -> None:
-        now_iso = _iso(now)
         for lease in self._list_state("lease", status="active"):
-            if str(lease.get("expires_at") or "") <= now_iso:
+            if _parse_time(lease["expires_at"]) <= now:
                 lease["status"] = "expired"
                 self._put_state("lease", lease["lease_id"], lease)
 

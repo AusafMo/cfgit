@@ -35,6 +35,7 @@ class AgentStateAdapter(Protocol):
     def acquire_lease(self, lease: dict[str, Any], *, now: datetime) -> dict[str, Any]: ...
     def renew_lease(self, lease_id: str, *, ttl_seconds: int, now: datetime) -> dict[str, Any]: ...
     def release_lease(self, lease_id: str, *, now: datetime) -> dict[str, Any]: ...
+    def get_lease(self, lease_id: str) -> dict[str, Any] | None: ...
     def list_leases(self, *, active_only: bool = True, now: datetime | None = None) -> list[dict[str, Any]]: ...
     def open_intent(self, intent: dict[str, Any]) -> dict[str, Any]: ...
     def close_intent(self, intent_id: str, status: str, now: datetime) -> dict[str, Any]: ...
@@ -125,6 +126,9 @@ class InMemoryAgentStateAdapter:
             lease = self._require(self.leases, lease_id, "lease_not_found")
             if lease.get("status") != "active":
                 raise AgentStateError("lease_not_active", "lease is not active", {"lease_id": lease_id})
+            if _parse_time(lease["expires_at"]) <= now:
+                lease["status"] = "expired"
+                raise AgentStateError("lease_expired", "lease has expired", {"lease_id": lease_id})
             lease["expires_at"] = _iso(now + timedelta(seconds=ttl_seconds))
             return deepcopy(lease)
 
@@ -135,6 +139,10 @@ class InMemoryAgentStateAdapter:
                 lease["status"] = "released"
                 lease["released_at"] = _iso(now)
             return deepcopy(lease)
+
+    def get_lease(self, lease_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return deepcopy(self.leases.get(lease_id))
 
     def list_leases(self, *, active_only: bool = True, now: datetime | None = None) -> list[dict[str, Any]]:
         with self._lock:

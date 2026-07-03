@@ -127,6 +127,15 @@ class AgentCoordinator:
 
     def release(self, *, session_id: str, lease_id: str) -> dict[str, Any]:
         session = self._require_running_session(session_id)
+        lease_before_release = self.adapter.get_lease(lease_id)
+        if lease_before_release is None:
+            raise AgentStateError("lease_not_found", f"{lease_id} was not found", {"id": lease_id})
+        if lease_before_release.get("session_id") != session_id:
+            raise AgentStateError(
+                "lease_not_owned",
+                "lease belongs to a different session",
+                {"lease_id": lease_id, "owner_session_id": lease_before_release.get("session_id")},
+            )
         lease = self.adapter.release_lease(lease_id, now=utcnow())
         self._event(
             "lease.released",
