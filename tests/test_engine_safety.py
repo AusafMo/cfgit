@@ -152,6 +152,22 @@ def test_single_record_valid_time_ref_resolves_date_syntax() -> None:
     assert resolved["doc"]["value"] == "old"
 
 
+def test_bare_numeric_ref_not_found_points_to_sequence_syntax() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    row = _history_row(
+        coll,
+        {"id": "alpha", "value": "old"},
+        seq=12,
+        valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    engine, _adapter = _engine(collection=coll, history=[row], heads={("demo", "alpha"): row})
+
+    with pytest.raises(NoSuchConfig, match=r"sequence refs use @12"):
+        engine.resolve_ref(RecordRef("demo", "alpha"), "12")
+
+    assert engine.resolve_ref(RecordRef("demo", "alpha"), "@12")["seq"] == 12
+
+
 def test_empty_message_is_rejected_in_engine() -> None:
     engine, _adapter = _engine(records={("demo", "alpha"): {"id": "alpha", "value": 1}})
 
@@ -589,8 +605,14 @@ class FakeAdapter:
                 continue
             if record_id is not None and row["record_id"] != record_id:
                 continue
-            if ref is not None and ref.startswith("@") and row["seq"] != int(ref[1:]):
-                continue
+            if ref is not None:
+                if ref.startswith("@"):
+                    if row["seq"] != int(ref[1:]):
+                        continue
+                else:
+                    oid = ref.removeprefix("sha256:").removeprefix("#")
+                    if not str(row["oid"]).startswith(oid):
+                        continue
             if as_of_recorded is not None and row["recorded_at"] > as_of_recorded:
                 continue
             if as_of_valid is not None:
