@@ -1082,7 +1082,7 @@ class Engine:
         else:
             rows = self.adapter.query_history(collection=ref.collection, record_id=ref.record_id, ref=value, with_doc=True)
         if not rows:
-            raise NoSuchConfig(f"ref not found: {value}")
+            raise NoSuchConfig(_ref_not_found_message(value))
         if len(rows) > 1:
             raise ValueError(f"ambiguous ref: {value}")
         return rows[0]
@@ -1356,6 +1356,12 @@ def _branch_plan_result(plan: dict[str, Any], *, state: str | None = None) -> di
         if key in plan and key not in result:
             result[key] = plan[key]
     return result
+
+
+def _ref_not_found_message(value: str) -> str:
+    if value.isdecimal():
+        return f"ref not found: {value} (sequence refs use @{value}; bare values are oid prefixes)"
+    return f"ref not found: {value}"
 
 
 def _parse_branch_range(value: str, default_branch: str) -> tuple[str, str]:

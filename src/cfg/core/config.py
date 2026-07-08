@@ -308,13 +308,7 @@ def _resolve_uri(raw: str, *, env_name: str) -> str:
     if raw.startswith("env:"):
         key = raw[4:]
         value = os.environ.get(key)
-        if value:
-            return value
-        if env_name == "dev":
-            fallback = os.environ.get("MONGODB_URI")
-            if fallback:
-                return fallback
-        return ""
+        return value or ""
     return raw
 
 
