@@ -153,3 +153,37 @@ def test_excerpt_caps_lines_and_strips_headers():
     out = update._excerpt(body)
     assert out.count("\n") + 1 == update._NOTES_MAX_LINES  # capped
     assert "Highlights" not in out
+
+
+# --- CLI nudge gating (the safety contract: humans see it, scripts never do) ----------------
+
+
+@pytest.mark.parametrize(
+    "cmd,json_mode,isatty,expect_nudge",
+    [
+        ("status", False, True, True),    # interactive human read cmd → nudge
+        ("doctor", False, True, True),    # another read cmd → nudge
+        ("status", False, False, False),  # piped (non-TTY) → silent (scripts unaffected)
+        ("status", True, True, False),    # --json → silent (agent JSON unpolluted)
+        ("commit", False, True, False),   # write command → never (not in front of a mutation)
+        ("set", False, True, False),      # write command → never
+    ],
+)
+def test_cli_nudge_gating(monkeypatch, capsys, cmd, json_mode, isatty, expect_nudge):
+    import types
+
+    from cfg.cli import main as m
+
+    # force an update to be "available" so the nudge WOULD fire if allowed. `_maybe_update_nudge`
+    # does `from cfg import update` internally, so patching update.check on the module suffices.
+    monkeypatch.setattr(
+        update, "check",
+        lambda *a, **k: types.SimpleNamespace(message="cfgit 9.9.9 is available!"),
+    )
+    monkeypatch.setattr(m.sys.stdout, "isatty", lambda: isatty, raising=False)
+
+    m._maybe_update_nudge(types.SimpleNamespace(cmd=cmd, json=json_mode))
+
+    captured = capsys.readouterr()
+    assert ("available" in captured.err) is expect_nudge
+    assert captured.out == ""  # the nudge must NEVER touch stdout, in any case
