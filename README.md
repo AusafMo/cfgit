@@ -498,6 +498,7 @@ Tools include:
 - `cfg_bulk_commit`
 - `cfg_set`
 - `cfg_export`
+- `cfg_import`
 - `cfg_branch_list`
 - `cfg_branch_create`
 - `cfg_branch_delete`
