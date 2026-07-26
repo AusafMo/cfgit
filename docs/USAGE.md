@@ -109,7 +109,32 @@ cfg commit --bulk-from batch.json -m "switch planner routing"
 
 Bulk commit preflights every target before writing. If any record has un-adopted
 drift, is missing, duplicates another target, or trips the secret policy, no
-record in the batch is applied.
+record in the batch is applied. Add `--dry-run` to preview the per-record delta for the whole
+batch (`would_commit` / `noop` / `changed_outside_cfgit`) without writing — run it before any
+collection-scale replace:
+
+```bash
+cfg commit --bulk-from batch.json --dry-run
+```
+
+## Snapshot and restore a collection
+
+`cfg export` writes a portable, re-importable snapshot of the current live documents, each
+stamped with its cfgit head seq/oid. `cfg import --from` writes those documents back through the
+drift-guarded bulk-commit path, so the restore is recorded in history like any other change.
+Together they make "back it up, do the bulk change, roll it back" a fully in-cfgit workflow:
+
+```bash
+cfg export --out backup.json                    # snapshot every collection to a file
+cfg export modelgarden_models:openai/gpt-4o-mini  # or one record, to stdout
+# ... risky bulk change ...
+cfg import --from backup.json --dry-run          # preview the restore
+cfg import --from backup.json -m "restore from backup"
+```
+
+For an in-tool rollback without a file, use `cfg tag` + `cfg restore --tag` (or
+`cfg restore --as-of <date>`) instead — see [Tags](#tags) and [Restore](#restore). Both record
+the restore in history; export/import additionally gives you a standalone file to keep or share.
 
 If the live record changed after cfgit last recorded it, commit returns
 `changed_outside_cfgit` and does not apply your document. Inspect the drift first:
