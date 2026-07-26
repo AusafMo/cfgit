@@ -164,6 +164,75 @@ def commit(
     return result, code
 
 
+def set_fields(
+    engine: Engine,
+    record: str,
+    assignments: list[tuple[str, Any]],
+    *,
+    message: str,
+    allow_secret: bool = False,
+    dry_run: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """Fast-path scalar edit: fetch live, apply dotted assignments, route through the SAME
+    commit path (drift guard + secret scan + history) — never a raw write."""
+    ref = parse_record(record)
+    if not assignments:
+        raise ValueError("set needs at least one field=value")
+    doc = engine.build_commit_doc(ref, assignments)
+    if dry_run:
+        result = engine.commit_preview(ref, doc, allow_secret=allow_secret)
+        return result, EXIT_OK
+    result = engine.commit(ref, doc, message=message, allow_secret=allow_secret)
+    code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
+    return result, code
+
+
+def parse_assignments(pairs: list[str]) -> list[tuple[str, Any]]:
+    """Parse `field=value` tokens. Values are JSON-coerced (true/5/["a"] type naturally); a
+    `str:` prefix forces a string literal (e.g. version=str:1.0)."""
+    out: list[tuple[str, Any]] = []
+    for pair in pairs:
+        if "=" not in pair:
+            raise ValueError(f"expected field=value, got {pair!r}")
+        field, raw = pair.split("=", 1)
+        field = field.strip()
+        if not field:
+            raise ValueError(f"empty field name in {pair!r}")
+        out.append((field, _coerce_value(raw)))
+    return out
+
+
+def _coerce_value(raw: str) -> Any:
+    if raw.startswith("str:"):
+        return raw[4:]
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+
+
+def _assignments_from_payload(value: Any) -> list[tuple[str, Any]]:
+    """Accept assignments as a dict {path: typed_value} (MCP), a list of `field=value` strings
+    (CLI), or a JSON string of either."""
+    if value is None:
+        raise ValueError("set needs assignments")
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict):
+        return [(str(k), v) for k, v in value.items()]
+    if isinstance(value, list):
+        if all(isinstance(item, str) for item in value):
+            return parse_assignments(value)
+        # list of {field, value} objects
+        out: list[tuple[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict) or "field" not in item:
+                raise ValueError("each assignment needs a 'field' (and 'value')")
+            out.append((str(item["field"]), item.get("value")))
+        return out
+    raise ValueError("assignments must be a mapping, a list, or a JSON string")
+
+
 def bulk_commit(
     engine: Engine,
     items: Any,
@@ -375,6 +444,15 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             message=str(payload.get("message") or "commit"),
             allow_secret=bool(payload.get("allow_secret")),
             branch=_blank_to_none(payload.get("branch")),
+            dry_run=bool(payload.get("dry_run")),
+        )
+    if name == "set":
+        return set_fields(
+            engine,
+            _required(payload, "record"),
+            _assignments_from_payload(payload.get("assignments")),
+            message=str(payload.get("message") or "set fields"),
+            allow_secret=bool(payload.get("allow_secret")),
             dry_run=bool(payload.get("dry_run")),
         )
     if name in {"bulk_commit", "commit_many"}:

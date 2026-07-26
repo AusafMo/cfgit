@@ -2,6 +2,7 @@
 """DB-neutral cfgit engine."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 import fnmatch
@@ -670,6 +671,23 @@ class Engine:
             "head_oid": expected_head,
         }
 
+    def build_commit_doc(
+        self,
+        ref: RecordRef,
+        assignments: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        """Fetch the LIVE document and apply dotted-path assignments, returning the full
+        candidate doc to hand to commit()/commit_preview(). Basing on live (not HEAD) means a
+        drifted record makes the subsequent commit refuse — the fast path inherits the clobber
+        guard instead of silently overwriting an out-of-band change."""
+        live = self.adapter.get_record(ref.collection, ref.record_id)
+        if live is None:
+            raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
+        doc = deepcopy(live)
+        for path, value in assignments:
+            _set_dotted(doc, path, value)
+        return doc
+
     def commit_many(
         self,
         items: list[tuple[RecordRef, dict[str, Any]]],
@@ -1314,6 +1332,60 @@ def _require_message(message: str) -> str:
     if not text:
         raise ValueError("message must be non-empty")
     return text
+
+
+def _set_dotted(doc: dict[str, Any], path: str, value: Any) -> None:
+    """Set a value at a dotted path, creating intermediate dicts. Supports list indices as
+    `a.b[0]` or `a.b.0` (the index must already exist in a list). Mutates `doc` in place."""
+    parts = _split_path(path)
+    if not parts:
+        raise ValueError("empty field path")
+    cur: Any = doc
+    for i, (key, is_index) in enumerate(parts):
+        last = i == len(parts) - 1
+        if is_index:
+            if not isinstance(cur, list):
+                raise ValueError(f"{path}: expected a list at index [{key}]")
+            idx = int(key)
+            if idx < 0 or idx >= len(cur):
+                raise ValueError(f"{path}: list index [{idx}] out of range")
+            if last:
+                cur[idx] = value
+            else:
+                cur = cur[idx]
+        else:
+            if not isinstance(cur, dict):
+                raise ValueError(f"{path}: cannot set field {key!r} on a non-object")
+            if last:
+                cur[key] = value
+            else:
+                if key not in cur:
+                    cur[key] = {}
+                elif not isinstance(cur[key], (dict, list)):
+                    raise ValueError(
+                        f"{path}: {key!r} is a scalar; refusing to overwrite it with an object"
+                    )
+                cur = cur[key]
+
+
+def _split_path(path: str) -> list[tuple[str, bool]]:
+    """Parse `a.b[0].c` into [(a,False),(b,False),(0,True),(c,False)]. (key, is_index)."""
+    out: list[tuple[str, bool]] = []
+    for segment in str(path).split("."):
+        if not segment:
+            raise ValueError(f"invalid field path: {path!r}")
+        # split trailing [n] indices off a key, e.g. "b[0][1]"
+        m = re.match(r"^([^\[\]]*)((?:\[\d+\])*)$", segment)
+        if not m:
+            raise ValueError(f"invalid field path segment: {segment!r}")
+        name, indices = m.group(1), m.group(2)
+        if name:
+            out.append((name, False))
+        elif not indices:
+            raise ValueError(f"invalid field path segment: {segment!r}")
+        for idx in re.findall(r"\[(\d+)\]", indices):
+            out.append((idx, True))
+    return out
 
 
 _BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")

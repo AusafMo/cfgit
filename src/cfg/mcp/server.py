@@ -191,6 +191,35 @@ def cfg_bulk_commit(
 
 
 @mcp.tool()
+def cfg_set(
+    record: str,
+    assignments: dict[str, Any] | list[dict[str, Any]] | str,
+    message: str = "",
+    allow_secret: bool = False,
+    dry_run: bool = False,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Edit scalar fields of a record in place. `assignments` is a mapping of dotted-path →
+    value (e.g. {"enabled": true, "retry.max": 3}). Routes through the drift-guarded commit
+    path — never a raw write. Set dry_run=true to preview without writing."""
+    return _call(
+        "set",
+        {
+            "record": record,
+            "assignments": assignments,
+            "message": message,
+            "allow_secret": allow_secret,
+            "dry_run": dry_run,
+        },
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
 def cfg_log(
     record: str,
     limit: int = 20,

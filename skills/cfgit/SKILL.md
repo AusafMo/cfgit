@@ -39,8 +39,19 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - If history lookup reports an env mismatch, re-run against the stamped env before making changes.
 
 3. Mutate through cfgit.
-   - Write the full target document to a temp JSON file.
+   - For a few scalar fields, prefer the fast path — no temp file needed:
+     `cfg set <record> field=value other.nested=value -m "<message>" --json`.
+     Values are JSON-coerced (`enabled=true`, `n=5`, `tags=["a","b"]`); prefix with `str:` to
+     force a string (`version=str:1.0`). `cfg set` fetches the LIVE doc and routes through the
+     same commit path, so it refuses on drift exactly like `commit` (it is not a raw write).
+     Add `--dry-run` to preview the field-level delta without writing.
+   - For a hand edit of the whole doc, `cfg edit <record> -m "<message>"` opens it in $EDITOR.
+   - For a large or scripted change, write the full target document to a temp JSON file.
    - Run `cfg commit <record> --from <file> -m "<message>" --json`.
+   - Preview any commit before writing with `cfg commit <record> --from <file> --dry-run --json`
+     (returns `would_commit` with the delta, or `changed_outside_cfgit`/`noop`; writes nothing).
+   - Every outcome now carries a top-level `next` block (why + remedy + copy-paste `commands`);
+     on a refusal, follow `next.commands` rather than guessing.
    - For a coupled multi-record change, write a batch JSON file and run `cfg commit --bulk-from <file> -m "<message>" --json`. The batch file can be `[{"record":"collection:id","doc":{...}}]` or `{"collection:id": {...}}`.
    - For a draft branch, use `cfg --branch <branch> commit <record> --from <file> -m "<message>" --json` or `cfg --branch <branch> commit --bulk-from <file> -m "<message>" --json`. This writes cfgit refs only; runtime is unchanged.
    - If commit returns `changed_outside_cfgit`, stop and inspect drift.

@@ -182,6 +182,19 @@ def _parser() -> argparse.ArgumentParser:
         help="preview the field-level delta vs live and exit without writing (main-branch, single record)",
     )
 
+    p_set = sub.add_parser("set", help="edit scalar fields in place; routes through commit (drift-guarded)")
+    p_set.add_argument("record")
+    p_set.add_argument("assignments", nargs="+", metavar="field=value",
+                       help="dotted paths, JSON-coerced (enabled=true, n=5); str: forces a string (v=str:1.0)")
+    p_set.add_argument("-m", "--message")
+    p_set.add_argument("--allow-secret", action="store_true")
+    p_set.add_argument("--dry-run", action="store_true", help="preview the delta without writing")
+
+    p_edit = sub.add_parser("edit", help="open the live document in $EDITOR and commit the delta")
+    p_edit.add_argument("record")
+    p_edit.add_argument("-m", "--message")
+    p_edit.add_argument("--allow-secret", action="store_true")
+
     p_log = sub.add_parser("log")
     p_log.add_argument("record", nargs="?")
     p_log.add_argument("-n", "--limit", type=int, default=20)
@@ -378,6 +391,32 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
         return result, code
 
+    if args.cmd == "set":
+        from cfg.interfaces.actions import parse_assignments, set_fields
+
+        if not args.dry_run and not args.message:
+            raise ValueError("set needs -m/--message (or --dry-run to preview)")
+        return set_fields(
+            engine,
+            args.record,
+            parse_assignments(args.assignments),
+            message=args.message or "(dry-run)",
+            allow_secret=args.allow_secret,
+            dry_run=args.dry_run,
+        )
+
+    if args.cmd == "edit":
+        if not args.message:
+            raise ValueError("edit needs -m/--message")
+        ref = _parse_record(args.record)
+        live = engine.adapter.get_record(ref.collection, ref.record_id)
+        if live is None:
+            raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
+        edited = _edit_in_editor(live)
+        result = engine.commit(ref, edited, message=args.message, allow_secret=args.allow_secret)
+        code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
+        return result, code
+
     if args.cmd == "log":
         branch = _active_branch(engine.config, engine.env, args)
         if branch != engine.config.branches.default_branch:
@@ -521,6 +560,35 @@ def _load_json_file(path: str) -> dict[str, Any]:
 def _load_json_any(path: str) -> Any:
     with Path(path).open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _edit_in_editor(doc: dict[str, Any]) -> dict[str, Any]:
+    """Write `doc` as pretty JSON to a temp file, open it in $EDITOR, and reparse on save."""
+    import subprocess
+    import tempfile
+
+    editor = os.environ.get("CFG_EDITOR") or os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tf:
+        tf.write(json.dumps(_to_json(doc), indent=2, sort_keys=True))
+        temp_path = tf.name
+    try:
+        proc = subprocess.run([*editor.split(), temp_path])
+        if proc.returncode != 0:
+            raise ValueError(f"editor '{editor}' exited with status {proc.returncode}; aborting edit")
+        with open(temp_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"edited document is not valid JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("edited document must be a JSON object")
+        return data
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 def _parse_when(raw: str) -> datetime:
