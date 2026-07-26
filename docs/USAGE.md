@@ -125,6 +125,48 @@ secret-shaped fields and values from `[secrets]`. Fields in `secret_fields` are
 stripped before history. Use `--allow-secret` only for intentional fixtures or
 false positives; cfgit records that override in history metadata.
 
+## Preview a commit
+
+Add `--dry-run` to a single-record commit to see the exact field-level delta versus the live
+record and exit without writing. It returns `would_commit` with the changes, or the same
+`changed_outside_cfgit` / `noop` a real commit would, and still runs the secret policy so a
+blocked secret surfaces before you write:
+
+```bash
+cfg commit agent_configs:agent_planner --from planner.json --dry-run
+```
+
+## Fast field edits (set / edit)
+
+For a few scalar fields you do not need a full document or a temp file. `cfg set` fetches the
+live document, applies your changes, and commits through the same path as `cfg commit` — so it
+still refuses on out-of-band drift instead of clobbering it (it is not a raw write):
+
+```bash
+cfg set modelgarden_models:openai/gpt-4o-mini enabled=true retry.max=3 -m "enable + retry"
+```
+
+Paths are dotted, with list indices as `tags[0]`. Values are JSON-coerced — `enabled=true`
+becomes a boolean, `n=5` an integer, `tags=["a","b"]` a list — and a `str:` prefix forces a
+string (`version=str:1.0`). Add `--dry-run` to preview. To hand-edit the whole document in your
+`$EDITOR` instead, use `cfg edit <record> -m "message"`.
+
+## Situational awareness
+
+`cfg doctor --status` prints a one-look header of where you are pointed: resolved config file,
+env, target database, identity mode and whether it is verified, store reachability, and the
+number of tracked and drifted records. If a `needs_approval` environment is still in `open`
+identity mode — so writes would succeed unaudited — it prints a warning with the fix. That same
+warning also prints on any mutating command against such an environment; suppress it in scripts
+with `CFG_WARN_OPEN_MODE=0`.
+
+## Guidance on every outcome
+
+Every refusal and terminal outcome carries a `next` block: a plain-language reason plus the
+exact next command(s) to run (for drift, that is `cfg diff` then `cfg adopt`). On the CLI it
+prints to stderr; over `--json` and MCP it is a structured `next` field, so agents can follow
+`next.commands` without guessing.
+
 ## Branches and PRs
 
 Branching is opt-in:
@@ -274,14 +316,32 @@ shows recent activity across all configured records: current live drift plus the
 latest cfgit history entries. Selecting one of those entries opens that record's
 normal history and diff view.
 
-## JSON mode
+## Output mode
 
-Every command supports JSON output:
+By default output is human-readable when stdout is a terminal and JSON when piped or
+redirected, so interactive use reads well while pipelines stay parseable. Control it with
+`CFG_OUTPUT`:
 
 ```bash
-cfg --json status
-cfg --json diff agent_configs:agent_planner
+cfg status                       # human on a TTY, JSON when piped
+cfg --json status                # always JSON
+CFG_OUTPUT=json cfg status       # always JSON
+CFG_OUTPUT=human cfg status      # always human
 ```
 
-Agents and scripts should branch on `status` or the command output state, not on
-human-readable text.
+`--json` and `CFG_OUTPUT=json` always force JSON. Agents and scripts should branch on `status`
+and `state`, not on human-readable text.
+
+## Session defaults
+
+To avoid repeating flags, set environment defaults once:
+
+```bash
+export CFG_ENV=prod        # default for --env
+export CFG_CONFIG=./cfgit/aistudio.cfg.toml   # default for --config-file
+export CFG_AUTHOR=you@example.com             # default author (open identity mode)
+```
+
+cfgit also discovers `.cfg.toml` by walking up from the current directory, so you can run it
+from a subdirectory without `--config-file`. Global flags (`--config-file`, `--env`, `--author`,
+`--branch`, `--json`) go before the subcommand: `cfg --env prod status`.
