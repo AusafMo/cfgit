@@ -377,3 +377,19 @@ export CFG_AUTHOR=you@example.com             # default author (open identity mo
 cfgit also discovers `.cfg.toml` by walking up from the current directory, so you can run it
 from a subdirectory without `--config-file`. Global flags (`--config-file`, `--env`, `--author`,
 `--branch`, `--json`) go before the subcommand: `cfg --env prod status`.
+
+## Updates
+
+cfgit checks PyPI for a newer release on cheap read commands (`status`/`doctor`/`whoami`/`log`),
+throttled to once a day. For an interactive terminal it prints a one-line nudge to stderr with a
+short "what's new" excerpt from the release notes — never on `--json`/piped output, and it never
+upgrades for you:
+
+```bash
+cfg check-update              # force a check now (shows what's new + the release link)
+cfg check-update --snooze 30  # don't remind me for 30 days
+```
+
+Set `CFGIT_NO_UPDATE_CHECK=1` to disable the check entirely. Over MCP, the `cfg_check_update` tool
+does the same (pass `snooze_days` to snooze); agents should offer the upgrade but never run it.
+The check is best-effort — if the network is unavailable it stays silent.
