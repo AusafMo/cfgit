@@ -493,6 +493,32 @@ class Engine:
             results.append({"collection": item.collection, "record_id": item.record_id, "state": "imported", "seq": result.seq, "oid": result.oid})
         return results
 
+    def export_records(self, ref: RecordRef | None = None) -> dict[str, Any]:
+        """Read-only snapshot of live documents into a portable, re-importable artifact.
+
+        With a ref, exports that one record; without, exports every configured collection's live
+        records. Each item carries its live doc plus the current cfgit head seq/oid (or null if
+        untracked), so the snapshot records exactly which version it represents. Writes nothing.
+        """
+        refs = [ref] if ref else self._all_refs(include_history=False)
+        items: list[dict[str, Any]] = []
+        for item in sorted(refs, key=lambda r: (r.collection, r.record_id)):
+            live = self.adapter.get_record(item.collection, item.record_id)
+            if live is None:
+                continue
+            head = self.adapter.get_head(item.collection, item.record_id)
+            items.append(
+                {
+                    "record": f"{item.collection}:{item.record_id}",
+                    "collection": item.collection,
+                    "record_id": item.record_id,
+                    "head_seq": head.get("seq") if head else None,
+                    "head_oid": head.get("oid") if head else None,
+                    "doc": live,
+                }
+            )
+        return {"version": 1, "kind": "cfgit-export", "count": len(items), "items": items}
+
     def doctor(self, ref: RecordRef | None = None, *, large_field_bytes: int = 20000) -> dict[str, Any]:
         """Read-only preflight. Walks live records and reports what would trip an
         import/commit BEFORE anything is written: secret-deny matches (grouped by
@@ -748,6 +774,18 @@ class Engine:
                     expected_live_oid=plan["expected_live"],
                     make_head=True,
                 )
+            except KeyboardInterrupt:
+                # A cancel between per-record writes: each apply() is atomic, so already-committed
+                # records are durable. Return a clean partial report (what landed, what did not)
+                # instead of dying silently and leaving the operator guessing about DB state.
+                pending = [_plan_result(p) for p in plans[offset:]]
+                return {
+                    "state": "partial",
+                    "cancelled": True,
+                    "results": results,
+                    "failed": [],
+                    "pending": pending,
+                }
             except Exception as exc:
                 failed = [
                     {

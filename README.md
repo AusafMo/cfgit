@@ -246,11 +246,34 @@ Commit multiple records as one batch intent:
 
 ```bash
 cfg commit --bulk-from batch.json -m "switch planner routing"
+cfg commit --bulk-from batch.json --dry-run   # preview every record's delta, write nothing
 ```
 
 Bulk commit preflights the whole batch before writing. If any target has
 un-adopted drift, is missing, duplicates another target, or trips the secret
-policy, cfgit applies none of the batch.
+policy, cfgit applies none of the batch. `--dry-run` previews the per-record delta
+(`would_commit` / `noop` / `changed_outside_cfgit`) for the whole batch without writing —
+run it before any collection-scale replace.
+
+### Snapshot and restore a whole collection
+
+For "back it up, replace many rows, roll the whole thing back," `cfg export` writes a portable,
+re-importable snapshot of the current live documents (each stamped with its cfgit head seq/oid),
+and `cfg import --from` writes those documents back through the drift-guarded bulk-commit path —
+so the restore is recorded in history like any other change:
+
+```bash
+cfg export --out backup.json                       # snapshot every collection to a file
+cfg export modelgarden_models:openai/gpt-4o-mini   # or one record, to stdout
+# ... do a risky bulk change ...
+cfg import --from backup.json --dry-run             # preview the restore
+cfg import --from backup.json -m "restore from backup"
+```
+
+This is the file-based backup artifact (portable, out-of-tool, diffable). For an in-tool
+rollback with no file, use `cfg tag` + `cfg restore --tag` / `cfg restore --as-of <date>`, which
+version the whole system inside cfgit. Both record the restore in history; export/import also
+gives you a standalone file to keep or share.
 
 Draft changes on a branch before mutating runtime:
 
@@ -324,12 +347,15 @@ cfg init
 cfg doctor [record]
 cfg doctor --status
 cfg import --all -m "initial import"
+cfg export [record] [--out file.json]
+cfg import --from <export.json> [--dry-run] -m "message"
 cfg status [record]
 cfg diff <record> [from] [to]
 cfg impact <record> [from] [to]
 cfg commit <record> --from <file.json> -m "message"
 cfg commit <record> --from <file.json> --dry-run
 cfg commit --bulk-from <batch.json> -m "message"
+cfg commit --bulk-from <batch.json> --dry-run
 cfg set <record> field=value nested.field=value -m "message"
 cfg edit <record> -m "message"
 cfg branch list
@@ -464,6 +490,7 @@ Tools include:
 - `cfg_commit`
 - `cfg_bulk_commit`
 - `cfg_set`
+- `cfg_export`
 - `cfg_branch_list`
 - `cfg_branch_create`
 - `cfg_branch_delete`

@@ -52,7 +52,8 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
      (returns `would_commit` with the delta, or `changed_outside_cfgit`/`noop`; writes nothing).
    - Every outcome now carries a top-level `next` block (why + remedy + copy-paste `commands`);
      on a refusal, follow `next.commands` rather than guessing.
-   - For a coupled multi-record change, write a batch JSON file and run `cfg commit --bulk-from <file> -m "<message>" --json`. The batch file can be `[{"record":"collection:id","doc":{...}}]` or `{"collection:id": {...}}`.
+   - For a coupled multi-record change, write a batch JSON file and run `cfg commit --bulk-from <file> -m "<message>" --json`. The batch file can be `[{"record":"collection:id","doc":{...}}]` or `{"collection:id": {...}}`. Preview a collection-scale batch first with `cfg commit --bulk-from <file> --dry-run --json` — it reports each record's `would_commit`/`noop`/`changed_outside_cfgit` and writes nothing.
+   - Before a risky bulk change, snapshot the current live docs with `cfg export --out backup.json --json` (a portable, re-importable artifact stamped with head seq/oid). To roll back, `cfg import --from backup.json -m "<message>" --json` writes them back through the drift-guarded path (preview with `--dry-run`). For an in-tool rollback with no file, use `cfg tag` + `cfg restore --tag` instead.
    - For a draft branch, use `cfg --branch <branch> commit <record> --from <file> -m "<message>" --json` or `cfg --branch <branch> commit --bulk-from <file> -m "<message>" --json`. This writes cfgit refs only; runtime is unchanged.
    - If commit returns `changed_outside_cfgit`, stop and inspect drift.
    - If bulk commit returns `blocked`, no record was applied; inspect `failed`. If it returns `partial`, some records were applied before a race/failure; inspect `results`, `failed`, and `pending` before continuing.
@@ -61,6 +62,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 4. Reconcile drift.
    - `cfg diff <record> =HEAD =live --json`
    - `cfg adopt <record> -m "<message>" --json`
+   - If `cfg doctor --status` reports a high drift ratio (many records `changed_outside_cfgit`), baseline the whole collection once with `cfg adopt --all -m "<message>" --json` so later edits and restore work without a per-record adopt.
 
 5. Restore.
    - Single record: `cfg restore <record> <ref> -m "<message>" --json`
@@ -85,6 +87,7 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_impact`
 - `cfg_commit`
 - `cfg_bulk_commit`
+- `cfg_export`
 - `cfg_branch_list`
 - `cfg_branch_create`
 - `cfg_branch_delete`

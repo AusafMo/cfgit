@@ -67,17 +67,24 @@ def cfg_doctor(
 def cfg_import(
     record: str | None = None,
     all_records: bool = False,
+    from_export: dict[str, Any] | list[dict[str, Any]] | None = None,
+    dry_run: bool = False,
     message: str = "initial import",
     allow_secret: bool = False,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
 ) -> dict[str, Any]:
+    """Start tracking live records (record or all_records), or restore documents from a
+    `cfg_export` artifact via from_export (writes them back through the drift-guarded bulk-commit
+    path; set dry_run=true to preview)."""
     return _call(
         "import",
         {
             "record": record,
             "all_records": all_records,
+            "export": from_export,
+            "dry_run": dry_run,
             "message": message,
             "allow_secret": allow_secret,
         },
@@ -85,6 +92,19 @@ def cfg_import(
         env=env,
         author=author,
     )
+
+
+@mcp.tool()
+def cfg_export(
+    record: str | None = None,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Read-only snapshot of live documents into a portable, re-importable artifact. Pass a
+    record for one, or omit it to export every configured collection. Each item is stamped with
+    its cfgit head seq/oid. Feed the result back to cfg_import(from_export=...) to restore."""
+    return _call("export", {"record": record}, config_file=config_file, env=env, author=author)
 
 
 @mcp.tool()
@@ -168,9 +188,10 @@ def cfg_commit(
 @mcp.tool()
 def cfg_bulk_commit(
     items: list[dict[str, Any]] | dict[str, Any] | str,
-    message: str,
+    message: str = "",
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
@@ -180,10 +201,13 @@ def cfg_bulk_commit(
     `items` may be either:
     [{"record":"collection:id","doc":{...}}, ...]
     {"collection:id": {...}, ...}, or a JSON string in either shape.
+
+    Set dry_run=true to preview every record's delta (would_commit / noop / changed_outside_cfgit)
+    without writing — recommended before a collection-scale replace.
     """
     return _call(
         "bulk_commit",
-        {"items": items, "message": message, "allow_secret": allow_secret, "branch": branch},
+        {"items": items, "message": message, "allow_secret": allow_secret, "branch": branch, "dry_run": dry_run},
         config_file=config_file,
         env=env,
         author=author,
