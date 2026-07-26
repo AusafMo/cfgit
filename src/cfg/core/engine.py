@@ -774,6 +774,18 @@ class Engine:
                     expected_live_oid=plan["expected_live"],
                     make_head=True,
                 )
+            except KeyboardInterrupt:
+                # A cancel between per-record writes: each apply() is atomic, so already-committed
+                # records are durable. Return a clean partial report (what landed, what did not)
+                # instead of dying silently and leaving the operator guessing about DB state.
+                pending = [_plan_result(p) for p in plans[offset:]]
+                return {
+                    "state": "partial",
+                    "cancelled": True,
+                    "results": results,
+                    "failed": [],
+                    "pending": pending,
+                }
             except Exception as exc:
                 failed = [
                     {

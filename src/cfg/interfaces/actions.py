@@ -196,8 +196,39 @@ def import_records(
     return result, EXIT_OK
 
 
+EXPORT_WARN_RECORDS = 2000
+EXPORT_WARN_BYTES = 50 * 1024 * 1024  # 50 MB serialized
+
+
 def export_records(engine: Engine, record: str | None = None) -> tuple[dict[str, Any], int]:
-    return engine.export_records(parse_record(record) if record else None), EXIT_OK
+    report = engine.export_records(parse_record(record) if record else None)
+    warning = _export_size_warning(report)
+    if warning:
+        report["warning"] = warning
+    return report, EXIT_OK
+
+
+def _export_size_warning(report: dict[str, Any]) -> str | None:
+    """Soft warning (never a hard cap) when a snapshot is large by control-plane standards —
+    it usually means the config points at a data-plane collection (events, user content, jobs),
+    which cfgit is not designed to version. Triggers on record count OR serialized size."""
+    count = report.get("count", 0)
+    try:
+        size = len(json.dumps(to_json(report)))
+    except (TypeError, ValueError):
+        size = 0
+    reasons = []
+    if count >= EXPORT_WARN_RECORDS:
+        reasons.append(f"{count} records")
+    if size >= EXPORT_WARN_BYTES:
+        reasons.append(f"~{size // (1024 * 1024)}MB")
+    if not reasons:
+        return None
+    return (
+        f"large export ({', '.join(reasons)}). cfgit is built for control-plane collections "
+        "(hundreds–low thousands of hand-curated records). If this is a data-plane collection "
+        "(events, user content, jobs), it is the wrong fit — use a backup or warehouse instead."
+    )
 
 
 def import_from_file(

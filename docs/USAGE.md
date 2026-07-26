@@ -136,6 +136,13 @@ For an in-tool rollback without a file, use `cfg tag` + `cfg restore --tag` (or
 `cfg restore --as-of <date>`) instead — see [Tags](#tags) and [Restore](#restore). Both record
 the restore in history; export/import additionally gives you a standalone file to keep or share.
 
+`cfg export` warns (without stopping) when a snapshot is large by control-plane standards — a
+strong hint that the config points at a data-plane collection (events, user content, jobs),
+which cfgit is not designed to version. If you cancel an `import --from` partway, cfgit reports
+`partial` with `cancelled: true` listing what committed and what is still pending; each record
+is applied atomically, so rerunning the same command resumes (already-applied records are
+no-ops).
+
 If the live record changed after cfgit last recorded it, commit returns
 `changed_outside_cfgit` and does not apply your document. Inspect the drift first:
 

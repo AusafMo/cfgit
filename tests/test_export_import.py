@@ -144,3 +144,71 @@ def test_drift_nudge_fires_only_above_threshold():
     nudge = actions._drift_nudges(tracked=288, drift=201)
     assert nudge and "adopt --all" in nudge[0]
     assert "201/288" in nudge[0]
+
+
+# --- export size warning --------------------------------------------------------------------
+
+
+def test_export_size_warning_absent_for_small_collection():
+    engine, _ = _engine(records={("demo", "a"): {"id": "a", "value": 1}})
+    report, _ = actions.export_records(engine)
+    assert "warning" not in report
+
+
+def test_export_size_warning_fires_on_high_record_count(monkeypatch):
+    monkeypatch.setattr(actions, "EXPORT_WARN_RECORDS", 3)
+    engine, _ = _engine(records={
+        ("demo", "a"): {"id": "a"}, ("demo", "b"): {"id": "b"},
+        ("demo", "c"): {"id": "c"}, ("demo", "d"): {"id": "d"},
+    })
+    report, _ = actions.export_records(engine)
+    assert "warning" in report
+    assert "control-plane" in report["warning"]
+    assert "4 records" in report["warning"]
+
+
+def test_export_size_warning_fires_on_byte_size(monkeypatch):
+    monkeypatch.setattr(actions, "EXPORT_WARN_BYTES", 500)
+    big = {"id": "a", "blob": "x" * 2000}
+    engine, _ = _engine(records={("demo", "a"): big})
+    report, _ = actions.export_records(engine)
+    assert "warning" in report and "MB" in report["warning"]
+
+
+# --- cancellation safety on the import/bulk write path --------------------------------------
+
+
+def test_commit_many_cancel_returns_clean_partial(monkeypatch):
+    engine, adapter = _engine(records={
+        ("demo", "a"): {"id": "a", "value": 0},
+        ("demo", "b"): {"id": "b", "value": 0},
+        ("demo", "c"): {"id": "c", "value": 0},
+    })
+    for r in ("a", "b", "c"):
+        engine.commit(RecordRef("demo", r), {"id": r, "value": 0}, message="seed")
+
+    # simulate a Ctrl-C during the 2nd record's write; the 1st is already durable
+    real_apply = adapter.apply
+    calls = {"n": 0}
+
+    def flaky_apply(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt
+        return real_apply(*a, **k)
+
+    monkeypatch.setattr(adapter, "apply", flaky_apply)
+
+    result = engine.commit_many(
+        [
+            (RecordRef("demo", "a"), {"id": "a", "value": 1}),
+            (RecordRef("demo", "b"), {"id": "b", "value": 1}),
+            (RecordRef("demo", "c"), {"id": "c", "value": 1}),
+        ],
+        message="bulk restore",
+    )
+    assert result["state"] == "partial"
+    assert result["cancelled"] is True
+    assert len(result["results"]) == 1          # 'a' committed before the cancel
+    assert result["results"][0]["record_id"] == "a"
+    assert len(result["pending"]) == 2          # 'b' and 'c' not applied — rerun resumes

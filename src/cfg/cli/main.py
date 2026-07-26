@@ -348,7 +348,12 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         return result, EXIT_OK
 
     if args.cmd == "export":
-        report = engine.export_records(_parse_record(args.record) if args.record else None)
+        from cfg.interfaces.actions import export_records as _export_action
+
+        report, _ = _export_action(engine, args.record if args.record else None)
+        warning = report.pop("warning", None)
+        if warning:
+            print(f"⚠ {warning}", file=sys.stderr)
         if getattr(args, "out", None):
             Path(args.out).write_text(json.dumps(_to_json(report), indent=2), encoding="utf-8")
             return {"state": "exported", "out": args.out, "count": report["count"]}, EXIT_OK
