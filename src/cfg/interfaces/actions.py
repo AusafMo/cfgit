@@ -149,8 +149,14 @@ def commit(
     message: str,
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
 ) -> tuple[dict[str, Any], int]:
-    if branch and branch != engine.config.branches.default_branch:
+    on_branch = bool(branch and branch != engine.config.branches.default_branch)
+    if dry_run:
+        if on_branch:
+            raise ValueError("--dry-run is only supported on the main-branch commit path")
+        result = engine.commit_preview(parse_record(record), doc, allow_secret=allow_secret)
+    elif on_branch:
         result = engine.branch_commit(branch, parse_record(record), doc, message=message, allow_secret=allow_secret)
     else:
         result = engine.commit(parse_record(record), doc, message=message, allow_secret=allow_secret)
@@ -369,6 +375,7 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             message=str(payload.get("message") or "commit"),
             allow_secret=bool(payload.get("allow_secret")),
             branch=_blank_to_none(payload.get("branch")),
+            dry_run=bool(payload.get("dry_run")),
         )
     if name in {"bulk_commit", "commit_many"}:
         return bulk_commit(

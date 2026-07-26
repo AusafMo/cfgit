@@ -139,16 +139,26 @@ def cfg_impact(
 def cfg_commit(
     record: str,
     doc_json: str,
-    message: str,
+    message: str = "",
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
 ) -> dict[str, Any]:
+    """Commit a full document. Set dry_run=true to preview the field-level delta vs live and
+    get back state="would_commit" without writing (main-branch, single record)."""
     return _call(
         "commit",
-        {"record": record, "doc": doc_json, "message": message, "allow_secret": allow_secret, "branch": branch},
+        {
+            "record": record,
+            "doc": doc_json,
+            "message": message,
+            "allow_secret": allow_secret,
+            "branch": branch,
+            "dry_run": dry_run,
+        },
         config_file=config_file,
         env=env,
         author=author,

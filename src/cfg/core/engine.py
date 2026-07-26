@@ -12,7 +12,7 @@ from typing import Any
 from cfg.adapters.base import AtomicityUnavailable, NoSuchConfig, StorageAdapter
 from cfg.core.authz import authorize_mutation
 from cfg.core.config import CollectionConfig, ProjectConfig
-from cfg.core.diff import diff_values
+from cfg.core.diff import diff_values, format_diff
 from cfg.core.hashing import hash_doc, stored_doc, strip_for_hash
 from cfg.core.identity import Identity, self_asserted_identity
 
@@ -632,6 +632,43 @@ class Engine:
             make_head=True,
         )
         return {"state": "committed", "oid": result.oid, "seq": result.seq}
+
+    def commit_preview(
+        self,
+        ref: RecordRef,
+        doc: dict[str, Any],
+        *,
+        allow_secret: bool = False,
+    ) -> dict[str, Any]:
+        """Dry-run of `commit` on the main-branch path: same guard order, no write.
+
+        Returns `changed_outside_cfgit` / `noop` exactly as `commit` would, so the operator
+        sees a refusal *before* attempting the write; otherwise returns `would_commit` with the
+        field-level delta. Runs the secret scan so a `SecretBlocked` surfaces here too.
+        """
+        self._authorize("commit")
+        coll = self.config.collection(ref.collection)
+        live = self.adapter.get_record(ref.collection, ref.record_id)
+        if live is None:
+            raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
+        head = self.adapter.get_head(ref.collection, ref.record_id)
+        expected_head = head.get("oid") if head else None
+        expected_live = hash_doc(live, coll)
+        if head and expected_live != expected_head:
+            return {"state": "changed_outside_cfgit", "live_oid": expected_live, "head_oid": expected_head}
+        new_oid = hash_doc(doc, coll)
+        if head and new_oid == expected_head:
+            return {"state": "noop", "oid": new_oid, "seq": head.get("seq")}
+        # secret policy must fire in preview too, so it is not a surprise at commit time
+        self._secret_meta(doc, coll, allow_secret=allow_secret, message="(dry-run)")
+        changes = diff_values(strip_for_hash(live, coll), strip_for_hash(doc, coll))
+        return {
+            "state": "would_commit",
+            "changes": changes,
+            "text": format_diff(changes),
+            "new_oid": new_oid,
+            "head_oid": expected_head,
+        }
 
     def commit_many(
         self,

@@ -174,8 +174,13 @@ def _parser() -> argparse.ArgumentParser:
         dest="bulk_from_file",
         help="JSON file containing a list/map of record+doc items to commit as one batch intent",
     )
-    p_commit.add_argument("-m", "--message", required=True)
+    p_commit.add_argument("-m", "--message")
     p_commit.add_argument("--allow-secret", action="store_true")
+    p_commit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview the field-level delta vs live and exit without writing (main-branch, single record)",
+    )
 
     p_log = sub.add_parser("log")
     p_log.add_argument("record", nargs="?")
@@ -322,6 +327,8 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         if args.bulk_from_file:
             if args.record or args.from_file:
                 raise ValueError("bulk commit uses --bulk-from without record or --from")
+            if not args.message:
+                raise ValueError("bulk commit needs -m/--message")
             from cfg.interfaces.actions import bulk_commit_exit_code, parse_bulk_commit_items
 
             items = parse_bulk_commit_items(_load_json_any(args.bulk_from_file))
@@ -342,6 +349,17 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         if not args.record or not args.from_file:
             raise ValueError("commit needs record and --from, or --bulk-from")
         doc = _load_json_file(args.from_file)
+        if getattr(args, "dry_run", False):
+            if branch != engine.config.branches.default_branch:
+                raise ValueError("--dry-run is only supported on the main-branch commit path")
+            result = engine.commit_preview(
+                _parse_record(args.record),
+                doc,
+                allow_secret=args.allow_secret,
+            )
+            return result, EXIT_OK
+        if not args.message:
+            raise ValueError("commit needs -m/--message")
         if branch != engine.config.branches.default_branch:
             result = engine.branch_commit(
                 branch,
