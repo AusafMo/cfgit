@@ -37,6 +37,8 @@ class StaticAgentPolicy:
     deny_paths: tuple[str, ...] = ()
     review_paths: tuple[str, ...] = ()
     require_claims: bool = True
+    require_intent: bool = True
+    allow_path_expansion: bool = False
 
     def check_claim(self, *, session: dict[str, Any], resource: str) -> None:
         role = self._role_for(session)

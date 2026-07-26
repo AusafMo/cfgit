@@ -454,6 +454,59 @@ def test_validate_patch_blocks_paths_outside_intent() -> None:
     assert raised.value.code == "intent_scope"
 
 
+def test_allow_path_expansion_permits_paths_outside_planned() -> None:
+    """With allow_path_expansion=True, a patch may touch paths beyond the intent's planned_paths."""
+    from cfg_agent import AgentCoordinator, InMemoryAgentStateAdapter, StaticAgentPolicy
+
+    engine, row = _clean_engine({"id": "alpha", "value": 1, "other": 1})
+    coordinator = AgentCoordinator(
+        InMemoryAgentStateAdapter(), policy=StaticAgentPolicy(allow_path_expansion=True)
+    )
+    session = coordinator.start_session(task="edit", agent_id="agent.a")
+    coordinator.claim(session_id=session["session_id"], resource="demo:alpha")
+    intent = coordinator.open_intent(
+        session_id=session["session_id"], resources=["demo:alpha"], summary="edit",
+        planned_paths=["/value"],
+    )
+    res = coordinator.validate_patch(
+        engine=engine, session_id=session["session_id"], record="demo:alpha",
+        patch=[{"op": "replace", "path": "/other", "value": 2}], intent_id=intent["intent_id"],
+    )
+    assert res["state"] == "ok"  # /other was outside planned_paths but expansion is allowed
+
+
+def test_require_intent_false_allows_validation_without_open_intent() -> None:
+    """With require_intent=False, validation proceeds even if no valid intent is supplied."""
+    from cfg_agent import AgentCoordinator, InMemoryAgentStateAdapter, StaticAgentPolicy
+
+    engine, _row = _clean_engine({"id": "alpha", "value": 1})
+    coordinator = AgentCoordinator(
+        InMemoryAgentStateAdapter(),
+        policy=StaticAgentPolicy(require_intent=False, require_claims=False),
+    )
+    session = coordinator.start_session(task="edit", agent_id="agent.a")
+    res = coordinator.validate_patch(
+        engine=engine, session_id=session["session_id"], record="demo:alpha",
+        patch=[{"op": "replace", "path": "/value", "value": 2}], intent_id="int_nonexistent",
+    )
+    assert res["state"] == "ok"  # no intent required
+
+
+def test_require_intent_default_still_blocks_without_intent() -> None:
+    """Default (require_intent=True) still rejects a missing/invalid intent — no silent regression."""
+    from cfg_agent import AgentCoordinator, AgentStateError, InMemoryAgentStateAdapter
+
+    engine, _row = _clean_engine({"id": "alpha", "value": 1})
+    coordinator = AgentCoordinator(InMemoryAgentStateAdapter())
+    session = coordinator.start_session(task="edit", agent_id="agent.a")
+    with pytest.raises(AgentStateError) as raised:
+        coordinator.validate_patch(
+            engine=engine, session_id=session["session_id"], record="demo:alpha",
+            patch=[{"op": "replace", "path": "/value", "value": 2}], intent_id="int_nonexistent",
+        )
+    assert raised.value.code == "intent_required"
+
+
 def test_validate_patch_blocks_stale_base() -> None:
     from cfg_agent import AgentCoordinator, AgentStateError, InMemoryAgentStateAdapter
 
@@ -708,6 +761,8 @@ default_lease_ttl_seconds = 12
 [agent.policies]
 deny_paths = ["/provider_config*"]
 require_human_review_for = ["/rollout*"]
+require_intent = false
+allow_path_expansion = true
 
 [[agent.role]]
 name = "routing-agent"
@@ -724,6 +779,8 @@ review_paths = ["/pricing*"]
     assert cfg.default_lease_ttl_seconds == 12
     assert cfg.deny_paths == ("/provider_config*",)
     assert cfg.review_paths == ("/rollout*",)
+    assert cfg.require_intent is False       # new policy knob parsed
+    assert cfg.allow_path_expansion is True  # new policy knob parsed
     assert cfg.roles["routing-agent"].can_claim == ("modelgarden_models:*",)
     assert cfg.roles["routing-agent"].review_paths == ("/pricing*",)
 

@@ -241,7 +241,13 @@ class AgentCoordinator:
         record_resource = f"{record_ref.collection}:{record_ref.record_id}"
         paths = patch_paths(patch)
         intent = self.adapter.get_intent(intent_id)
-        if intent is None or intent.get("session_id") != session_id or intent.get("status") != "open":
+        require_intent = getattr(self.policy, "require_intent", True)
+        intent_valid = (
+            intent is not None
+            and intent.get("session_id") == session_id
+            and intent.get("status") == "open"
+        )
+        if require_intent and not intent_valid:
             conflict = self._open_conflict(
                 session_id=session_id,
                 resource=record_resource,
@@ -250,16 +256,19 @@ class AgentCoordinator:
                 details={"intent_id": intent_id},
             )
             raise AgentStateError("intent_required", "open intent is required", {"conflict": conflict})
-        if not any(resources_overlap(resource, record_resource) for resource in intent.get("resources", [])):
-            conflict = self._open_conflict(
-                session_id=session_id,
-                resource=record_resource,
-                conflict_type="intent_scope",
-                message="intent does not include this record",
-                details={"intent_id": intent_id, "resources": intent.get("resources", [])},
-            )
-            raise AgentStateError("intent_scope", "intent does not include this record", {"conflict": conflict})
-        self._check_planned_paths(session_id, record_resource, paths, intent)
+        # When an intent IS supplied, always honor its scope/paths — even if intent isn't required.
+        if intent_valid:
+            if not any(resources_overlap(resource, record_resource) for resource in intent.get("resources", [])):
+                conflict = self._open_conflict(
+                    session_id=session_id,
+                    resource=record_resource,
+                    conflict_type="intent_scope",
+                    message="intent does not include this record",
+                    details={"intent_id": intent_id, "resources": intent.get("resources", [])},
+                )
+                raise AgentStateError("intent_scope", "intent does not include this record", {"conflict": conflict})
+            if not getattr(self.policy, "allow_path_expansion", False):
+                self._check_planned_paths(session_id, record_resource, paths, intent)
         if getattr(self.policy, "require_claims", True):
             self._check_claims(session_id, record_ref, paths)
         self.policy.check_patch(
@@ -275,7 +284,7 @@ class AgentCoordinator:
         # expected_base may be given either FLAT ({head_seq, head_oid}) or NESTED keyed by record
         # ({record: {head_seq, head_oid}}). Accept both so the stale-write guarantee does not
         # silently fail open on an easy-to-get-wrong shape.
-        expected = _resolve_expected_base(base, intent.get("expected_base"), record_resource)
+        expected = _resolve_expected_base(base, (intent or {}).get("expected_base"), record_resource)
         expected_seq = expected.get("head_seq")
         expected_oid = expected.get("head_oid")
         if expected_seq is not None and int(expected_seq) != int(head.get("seq")):

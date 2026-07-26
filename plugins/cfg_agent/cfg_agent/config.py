@@ -26,6 +26,8 @@ class AgentPluginConfig:
     deny_paths: tuple[str, ...] = ()
     review_paths: tuple[str, ...] = ()
     require_claims: bool = True
+    require_intent: bool = True
+    allow_path_expansion: bool = False
     roles: dict[str, AgentRolePolicy] = field(default_factory=dict)
 
 
@@ -56,6 +58,8 @@ def load_agent_config(path: str | Path | None = None) -> AgentPluginConfig:
             )
         ),
         require_claims=bool(policies_raw.get("require_claims", True)),
+        require_intent=bool(policies_raw.get("require_intent", True)),
+        allow_path_expansion=bool(policies_raw.get("allow_path_expansion", False)),
         roles=roles,
     )
 
@@ -76,6 +80,8 @@ def make_agent_coordinator(
         deny_paths=agent_cfg.deny_paths,
         review_paths=agent_cfg.review_paths,
         require_claims=agent_cfg.require_claims,
+        require_intent=agent_cfg.require_intent,
+        allow_path_expansion=agent_cfg.allow_path_expansion,
     )
     return AgentCoordinator(
         adapter=adapter,

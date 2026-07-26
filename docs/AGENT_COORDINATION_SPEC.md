@@ -6,6 +6,36 @@
 
 ---
 
+## 0. Implementation status (spec vs runtime)
+
+This spec is the design; the runtime implements most of it. A real-usage evaluation against live
+data (see **`docs/AGENT_COORDINATION_EVAL.md`**) validated the core contract and drove two fixes.
+Where this document and the runtime differ, the list below is authoritative:
+
+**Implemented and validated:** sessions, claims/leases (with overlap detection + structured
+conflicts), declared intent with scope + planned-path enforcement, base-move detection
+(`base_moved` — now shape-tolerant), live-drift detection with `allow_live_drift`, RFC-6902 patch
+validate/apply through cfgit core, review-required routing to cfgit branch/PR (fails closed when
+branches are disabled), role-scoped policy (`can_claim`/`deny_paths`/`review_paths`), idempotency,
+and the MCP tool surface. In-memory + Mongo + Postgres state adapters.
+
+**Recently added (post-eval):** `require_intent` and `allow_path_expansion` policy knobs
+(§13/§16); `cfg_agent_renew` public lease renewal (§10).
+
+**Deferred — described here but NOT in the current cut** (do not assume these work yet):
+- **Session expiration & takeover** (§7.1, §19, §23) — sessions do not auto-expire; heartbeat is
+  recorded but not enforced; there is no `takeover` action.
+- **Human-review approval tools** (`cfg_agent_request_review` / `approve_review` / `reject_review`,
+  §10) — review happens by routing the patch to a cfgit **PR**; approval is the cfgit PR merge, not
+  an agent-layer review object.
+- **Conflict `resolution` semantics** (§7.5) — the `resolution` field is stored but no action is
+  taken on it (no auto wait/rebase/abandon).
+- **Idempotency key scope** (§17) — the runtime keys on the idempotency_key (a reused key with a
+  *different* payload is correctly blocked with `idempotency_conflict` regardless of session; it is
+  NOT scoped strictly to `env + session_id + key` as written below).
+
+---
+
 ## 1. Definition
 
 `cfgit-agent` is an optional coordination and safety layer for multiple agents
