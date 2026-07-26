@@ -203,7 +203,10 @@ cfg status
 `cfg doctor` is read-only. Run it before the first import for a new database or
 `.cfg.toml`; it reports secret-deny matches, large fields, and live-rule/key
 issues in one pass, with paste-ready `secret_fields` and `ignore_fields`
-suggestions.
+suggestions. `cfg doctor --status` prints a "where am I" header: the resolved config
+file, env, target database, identity mode and whether it is verified, store reachability,
+and how many records are tracked or drifted — plus a warning if a `needs_approval`
+environment is still in `open` identity mode (writes would succeed unaudited).
 
 Check drift:
 
@@ -212,10 +215,24 @@ cfg status
 cfg diff agent_configs:agent_planner =HEAD =live
 ```
 
-Commit a full JSON document:
+Edit a few fields in place (the fast path — no temp file). `cfg set` fetches the live
+document and commits the change through the same drift-guarded path as `cfg commit`, so
+it refuses on out-of-band drift rather than clobbering it:
+
+```bash
+cfg set modelgarden_models:openai/gpt-4o-mini enabled=true retry.max=3 -m "enable + retry"
+```
+
+Values are JSON-coerced (`enabled=true` → bool, `n=5` → int, `tags=["a","b"]` → list);
+prefix with `str:` to force a string (`version=str:1.0`). Use `cfg edit <record>` to hand-edit
+the whole document in `$EDITOR`.
+
+Commit a full JSON document (add `--dry-run` to preview the field-level delta and exit
+without writing):
 
 ```bash
 cfg commit agent_configs:agent_planner --from planner.json -m "tune planner routing"
+cfg commit agent_configs:agent_planner --from planner.json --dry-run
 ```
 
 Commit multiple records as one batch intent:
@@ -305,12 +322,16 @@ Common commands:
 ```bash
 cfg init
 cfg doctor [record]
+cfg doctor --status
 cfg import --all -m "initial import"
 cfg status [record]
 cfg diff <record> [from] [to]
 cfg impact <record> [from] [to]
 cfg commit <record> --from <file.json> -m "message"
+cfg commit <record> --from <file.json> --dry-run
 cfg commit --bulk-from <batch.json> -m "message"
+cfg set <record> field=value nested.field=value -m "message"
+cfg edit <record> -m "message"
 cfg branch list
 cfg branch create <name> --from main
 cfg branch delete <name>
@@ -337,7 +358,17 @@ cfg whoami
 cfg ui
 ```
 
-Every command supports `--json` for scripts and agents.
+Every command supports `--json` for scripts and agents. By default output is human-readable
+when stdout is a terminal and JSON when piped or redirected; set `CFG_OUTPUT=json|human|auto`
+to control this, and `--json` always forces JSON.
+
+Every refusal and terminal outcome also carries a `next` block — a plain-language reason plus
+the exact next command(s) to run. On the CLI it prints to stderr; over `--json`/MCP it is a
+structured `next` field so agents can act on `next.commands` directly.
+
+Environment defaults: `CFG_ENV` (default env), `CFG_CONFIG` (config file path), and
+`CFG_AUTHOR` (author) let you set a session once instead of repeating flags. cfgit also
+discovers `.cfg.toml` by walking up from the current directory.
 
 Refs:
 
@@ -413,9 +444,16 @@ The MCP server exposes the same operations with a uniform envelope:
   "status": "ok",
   "code": 0,
   "message": "",
-  "data": {}
+  "data": {},
+  "state": null,
+  "next": null
 }
 ```
+
+`state` echoes the outcome's terminal state (for example `changed_outside_cfgit`), and `next`
+carries a self-teaching remedy — `{why, remedy, commands, docs}` — when the outcome needs one
+(a refusal, drift, a blocked batch, an identity/permission failure). Agents should branch on
+`state` and follow `next.commands`; both are `null` on a clean success.
 
 Tools include:
 
@@ -425,6 +463,7 @@ Tools include:
 - `cfg_impact`
 - `cfg_commit`
 - `cfg_bulk_commit`
+- `cfg_set`
 - `cfg_branch_list`
 - `cfg_branch_create`
 - `cfg_branch_delete`
