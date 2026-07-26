@@ -61,6 +61,16 @@ def test_ui_contains_recent_activity_history() -> None:
     assert "Select a recent entry" in UI_HTML
 
 
+def test_ui_contains_agent_coordination_manager() -> None:
+    from cfg.ui.server import UI_HTML
+
+    for marker in ('id="agents"', "/api/agent/state", "/api/agent/action", "Agent coordination"):
+        assert marker in UI_HTML
+    assert "end_session" in UI_HTML
+    assert "close_intent" in UI_HTML
+    assert "release" in UI_HTML
+
+
 def test_ui_contains_remedy_card_surface() -> None:
     from cfg.ui.server import UI_HTML
 

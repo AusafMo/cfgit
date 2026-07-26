@@ -1,11 +1,15 @@
 # Publishing
 
-cfgit publishes two Python distributions:
+cfgit currently publishes two Python distributions:
 
 - `cfgit`: Git-style history, diff, drift detection, branch/PR review, and
   rollback for live database records without migrating or owning the datastore.
 - `cfgit-impact`: optional plugin for deterministic system-impact summaries and
   opt-in LLM narration of database record diffs.
+
+The repository also contains `cfgit-agent`, an optional package for multi-agent
+coordination over live database records. It is not included in the release
+workflow until its PyPI project and trusted publisher are configured.
 
 Current release version: `0.1.2`.
 
@@ -35,11 +39,14 @@ Secrets.
 From the repository root:
 
 ```bash
-python -m pip install -U build twine
-rm -rf dist plugins/cfg_impact/dist
+python -m pip install -U build twine hatchling
+rm -rf dist plugins/cfg_impact/dist plugins/cfg_agent/dist
 python -m build
 python -m twine check dist/*
 cd plugins/cfg_impact
+python -m build
+python -m twine check dist/*
+cd ../cfg_agent
 python -m build
 python -m twine check dist/*
 ```
@@ -79,4 +86,6 @@ pip install 'cfgit[mongo]'
 pip install 'cfgit[postgres]'
 pip install 'cfgit[mongo,postgres,mcp]'
 pip install cfgit-impact
+# After cfgit-agent is published:
+# pip install cfgit-agent
 ```

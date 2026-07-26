@@ -7,6 +7,7 @@ Start with the user-facing guides:
 - [Identity & Attribution](IDENTITY_AND_ATTRIBUTION.md): open, authenticated, and enforced identity modes.
 - [Adapters](ADAPTERS.md): Mongo and Postgres storage details.
 - [Agents](AGENTS.md): MCP, skill, and impact plugin usage.
+- [Agent coordination spec](AGENT_COORDINATION_SPEC.md): optional `cfgit-agent` package for multi-agent database write coordination.
 
 Technical references:
 

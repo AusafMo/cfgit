@@ -24,6 +24,7 @@ jobs:
           python -m pip install -U pip
           python -m pip install -e '.[mongo,postgres,mcp,dev]'
           python -m pip install -e plugins/cfg_impact
+          python -m pip install -e plugins/cfg_agent
       - name: Run tests
         run: python -m pytest -q
 
@@ -38,9 +39,12 @@ jobs:
       - name: Build and check distributions
         run: |
           python -m pip install -U build twine
-          rm -rf dist plugins/cfg_impact/dist
+          rm -rf dist plugins/cfg_impact/dist plugins/cfg_agent/dist
           python -m build
           python -m twine check dist/*
           cd plugins/cfg_impact
+          python -m build
+          python -m twine check dist/*
+          cd ../cfg_agent
           python -m build
           python -m twine check dist/*

@@ -13,6 +13,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Never use cross-project Mongo URIs for writes. Remote managed Mongo writes are forbidden unless the user explicitly grants a per-turn exception and asks for that exact target.
 - Treat `changed_outside_cfgit` as the central state. Do not commit over it. Run `cfg diff`, explain what changed, then `cfg adopt` if the user wants to fold that live state into history.
 - If `[branches] enabled = true`, draft risky changes on a non-main branch and open a cfgit PR. Branch commits and PR creation do not mutate runtime; `cfg pr merge` is the only branch command that does.
+- If `cfgit-agent` is installed and `[agent] enabled = true`, use the `cfg_agent_*` MCP tools before mutation: start a session, claim the narrowest resource/path, open an intent, validate the JSON Patch, then apply it through cfgit. Do not raw-write the database from an agent session.
 - At the start of a cfgit session, call `cfg_check_update` (or `cfg check-update --json`). If `data.update_available` is true and `data.snoozed` is false, tell the user the new version, show `data.notes` (what's new), and offer to upgrade (`pip install -U cfgit`) or snooze — call `cfg_check_update` with `snooze_days=30` if they want to be reminded later. NEVER upgrade for them. It is best-effort and silent when there is nothing to say; skip if `data.disabled` (they set `CFGIT_NO_UPDATE_CHECK`).
 - Prefer `--json` for agent parsing. Output is otherwise human-on-a-TTY / JSON-when-piped; `CFG_OUTPUT=json|human|auto` overrides. To avoid repeating flags, `CFG_ENV`, `CFG_CONFIG`, and `CFG_AUTHOR` set session defaults, and cfgit discovers `.cfg.toml` by walking up from the cwd.
 - Run `cfg doctor --status` to confirm where you are pointed (config, env, target db, identity mode + whether verified, reachability, tracked/drift counts) before mutating an unfamiliar env. It warns if a `needs_approval` env is still in `open` identity mode — writes there succeed UNAUDITED; surface that to the user.
@@ -79,6 +80,17 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - `cfg pr create --base main --head <name> -m "<message>" --json`
    - `cfg pr merge <pr-id> --json` only after review. If merge returns `stale` or `changed_outside_cfgit`, do not retry blindly; inspect current main/live drift first.
 
+7. Multi-agent coordination when `cfgit-agent` is enabled.
+   - `cfg_agent_start_session(task, agent_id, config_file, env)`
+   - `cfg_agent_claim(session_id, "collection:id:/json/path", config_file, env)`
+   - `cfg_agent_open_intent(session_id, resources, summary, planned_paths, expected_base, config_file, env)`
+   - `cfg_agent_validate_patch(session_id, record, patch, intent_id, config_file, env)`
+   - `cfg_agent_apply_patch(session_id, record, patch, intent_id, message, idempotency_key, config_file, env)`
+   - `cfg_agent_end_session(session_id, status, summary, config_file, env)`
+   - Claim fields, not whole records, when another agent could safely work on sibling paths.
+   - If apply returns `state="review_requested"`, do not expect live runtime to change. A cfgit branch/PR was opened for human merge.
+   - If a claim, policy, base, or live-drift conflict is returned, surface it and stop; do not bypass with raw DB writes.
+
 ## MCP Tools
 
 If the cfgit MCP server is available, prefer its tools over shelling out:
@@ -113,6 +125,21 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_init`
 - `cfg_identity_hash` for setup only. Prefer the local CLI for real tokens because MCP clients may log tool inputs.
 - `cfg_check_update` — check PyPI for a newer cfgit; pass `snooze_days` to snooze. Never upgrades.
+
+If the optional `cfgit-agent` MCP server is installed, it also exposes multi-agent coordination tools:
+
+- `cfg_agent_start_session`
+- `cfg_agent_heartbeat`
+- `cfg_agent_end_session`
+- `cfg_agent_claim`
+- `cfg_agent_release`
+- `cfg_agent_open_intent`
+- `cfg_agent_close_intent`
+- `cfg_agent_validate_patch`
+- `cfg_agent_apply_patch`
+- `cfg_agent_status`
+- `cfg_agent_conflicts`
+- `cfg_agent_watch`
 
 Every MCP tool returns the same envelope: `status`, `code`, `message`, `data`, plus top-level `state` and `next`. `state` echoes the outcome's terminal state (e.g. `changed_outside_cfgit`, `noop`, `blocked`, `would_commit`); `next` is a self-teaching remedy `{why, remedy, commands}` when the outcome needs one, else null. Branch on `state` and follow `next.commands` on a refusal instead of guessing.
 For MCP bulk commits, pass `items` as structured JSON (`[{record, doc}]`) when the client supports it; use a JSON string only when the client cannot send nested objects cleanly.

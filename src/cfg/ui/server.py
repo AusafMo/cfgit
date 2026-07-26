@@ -62,10 +62,17 @@ class CfgUIHandler(BaseHTTPRequestHandler):
             params = parse_qs(parsed.query)
             self._send_json(self._state(params))
             return
+        if parsed.path == "/api/agent/state":
+            params = parse_qs(parsed.query)
+            self._send_json(self._agent_state(params))
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/api/agent/action":
+            self._agent_action()
+            return
         if parsed.path != "/api/action":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -75,6 +82,77 @@ class CfgUIHandler(BaseHTTPRequestHandler):
             engine = actions.make_engine(self._ctx(payload))
             result = actions.envelope(_run_action, name, engine, payload, record=payload.get("record"))
             self._send_json(result)
+        except Exception as exc:
+            self._send_json(
+                {"status": "error", "code": actions.EXIT_STORAGE, "message": str(exc), "data": None},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+
+    def _agent_state(self, params: dict[str, list[str]]) -> dict[str, Any]:
+        try:
+            from cfg_agent.config import cached_agent_coordinator, load_agent_config
+
+            ctx = self._ctx(params=params)
+            agent_cfg = load_agent_config(ctx.config_file)
+            if not agent_cfg.enabled:
+                return {
+                    "status": "disabled",
+                    "code": actions.EXIT_OK,
+                    "message": "cfgit-agent is not enabled in [agent]",
+                    "data": {
+                        "enabled": False,
+                        "backend": agent_cfg.state_backend,
+                        "state": None,
+                        "events": [],
+                    },
+                }
+            coordinator = cached_agent_coordinator(ctx.config_file, ctx.env)
+            return {
+                "status": "ok",
+                "code": actions.EXIT_OK,
+                "message": "",
+                "data": {
+                    "enabled": True,
+                    "backend": agent_cfg.state_backend,
+                    "state": actions.to_json(coordinator.status()),
+                    "events": actions.to_json(coordinator.watch(limit=100)),
+                },
+            }
+        except ModuleNotFoundError:
+            return {
+                "status": "unavailable",
+                "code": actions.EXIT_STORAGE,
+                "message": "install cfgit-agent to use the agent coordination UI",
+                "data": None,
+            }
+        except Exception as exc:
+            return {"status": "error", "code": actions.EXIT_STORAGE, "message": str(exc), "data": None}
+
+    def _agent_action(self) -> None:
+        try:
+            from cfg_agent.actions import AgentActions
+            from cfg_agent.config import cached_agent_coordinator
+
+            payload = self._read_json()
+            name = str(payload.get("action") or "")
+            if name not in _AGENT_UI_ACTIONS:
+                raise ValueError(f"unknown agent action: {name}")
+            ctx = self._ctx(payload)
+            action_payload = {key: value for key, value in payload.items() if key not in {"action", "env", "config_file", "author"}}
+            if name in {"validate_patch", "apply_patch"}:
+                action_payload["engine"] = actions.make_engine(ctx)
+            result = getattr(AgentActions(cached_agent_coordinator(ctx.config_file, ctx.env)), name)(action_payload)
+            self._send_json(result)
+        except ModuleNotFoundError:
+            self._send_json(
+                {
+                    "status": "error",
+                    "code": actions.EXIT_STORAGE,
+                    "message": "install cfgit-agent to use agent coordination actions",
+                    "data": None,
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
         except Exception as exc:
             self._send_json(
                 {"status": "error", "code": actions.EXIT_STORAGE, "message": str(exc), "data": None},
@@ -243,6 +321,22 @@ def _first(params: dict[str, list[str]], key: str) -> str | None:
     if not values:
         return None
     return values[0] or None
+
+
+_AGENT_UI_ACTIONS = {
+    "start_session",
+    "heartbeat",
+    "end_session",
+    "claim",
+    "release",
+    "open_intent",
+    "close_intent",
+    "status",
+    "conflicts",
+    "watch",
+    "validate_patch",
+    "apply_patch",
+}
 
 
 def find_free_port(host: str = DEFAULT_HOST) -> int:
@@ -563,6 +657,7 @@ UI_HTML = r"""<!doctype html>
     .mbg.show{display:flex}
     .modal{background:var(--panel);border:1px solid var(--edge2);border-radius:14px;width:min(540px,92vw);
       box-shadow:var(--shadow);overflow:hidden}
+    .modal.wide{width:min(920px,94vw)}
     .modal h3{margin:0;padding:16px 18px;font-family:var(--disp);font-weight:600;font-size:15px;border-bottom:1px solid var(--edge)}
     .modal .b{padding:16px 18px;display:flex;flex-direction:column;gap:12px}
     .modal .desc{color:var(--dim);font-size:13px;line-height:1.55}
@@ -572,6 +667,21 @@ UI_HTML = r"""<!doctype html>
     .modal textarea{width:100%;min-height:280px;resize:vertical;background:var(--bg);border:1px solid var(--edge2);border-radius:8px;padding:9px 11px;font-family:var(--mono);font-size:12px;color:var(--ink)}
     .modal input:focus,.modal textarea:focus{outline:none;border-color:var(--blue)}
     .modal .f{display:flex;justify-content:flex-end;gap:9px;padding:14px 18px;border-top:1px solid var(--edge)}
+    .agentbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+    .agentgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .agentsec{border:1px solid var(--edge);border-radius:10px;background:var(--bg);overflow:hidden;min-width:0}
+    .agentsec h4{margin:0;padding:9px 11px;border-bottom:1px solid var(--edge);font-family:var(--mono);
+      font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+    .agentlist{max-height:260px;overflow:auto}
+    .agentitem{padding:10px 11px;border-bottom:1px solid var(--edge);display:flex;gap:10px;align-items:flex-start}
+    .agentitem:last-child{border-bottom:0}
+    .agentmain{flex:1;min-width:0}
+    .agenttitle{font-family:var(--mono);font-size:12px;word-break:break-all}
+    .agentmeta{margin-top:4px;color:var(--dim);font-size:11.5px;display:flex;gap:7px;flex-wrap:wrap}
+    .agentact{border:1px solid var(--edge2);background:transparent;color:var(--dim);border-radius:7px;
+      padding:4px 8px;font-size:11.5px;cursor:pointer;white-space:nowrap}
+    .agentact:hover{color:var(--ink);border-color:var(--blue)}
+    .agentempty{padding:16px 11px;color:var(--faint);font-size:12px}
 
     @media (max-width:1080px){
       .cols{grid-template-columns:minmax(220px,230px) minmax(250px,280px) minmax(0,1fr)}
@@ -613,6 +723,7 @@ UI_HTML = r"""<!doctype html>
       .dcell{grid-template-columns:30px 14px 1fr}
       .impact .ib{padding:12px}
       .modal textarea{min-height:220px}
+      .agentgrid{grid-template-columns:1fr}
     }
     @media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
   </style>
@@ -637,6 +748,7 @@ UI_HTML = r"""<!doctype html>
       </div>
       <div class="seg" id="theme"><button data-th="dark" class="on">Dark</button><button data-th="light">Light</button></div>
       <button class="ghost" id="refresh" type="button" title="Reload state">Refresh</button>
+      <button class="ghost" id="agents" type="button" title="Show agent coordination state">Agents</button>
       <input id="configFile" style="display:none">
     </header>
     <div class="cols">
@@ -1106,7 +1218,7 @@ function renderDoc(res){const d=res&&res.data?res.data:res;const doc=d&&d.doc?d.
   $("diff").innerHTML=`<div class="paper doconly"><div class="paper-h"><div>document</div></div><div class="docbody">${esc(txt)}</div></div>`;}
 
 /* modals */
-function modal(html){$("modal").innerHTML=html;$("mbg").classList.add("show");}
+function modal(html,wide=false){$("modal").className="modal"+(wide?" wide":"");$("modal").innerHTML=html;$("mbg").classList.add("show");}
 function closeModal(){$("mbg").classList.remove("show");}
 $("mbg").addEventListener("click",e=>{if(e.target===$("mbg"))closeModal();});
 function openAdopt(rec){modal(`<h3>Adopt out-of-band change</h3><div class="b">
@@ -1213,6 +1325,85 @@ async function after(res,verb){closeModal();
   showRemedy(res&&res.next);
   const keep=S.sel;await loadState();if(keep)selectRecord(keep);}
 
+async function agentFetch(){
+  return fetch("/api/agent/state?"+qs()).then(r=>r.json()).catch(e=>({status:"error",message:String(e)}));
+}
+async function agentAct(action,data){
+  const r=await fetch("/api/agent/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...env(),...data})}).then(x=>x.json());
+  if(r.status!=="ok")toast(r.message||"agent action failed",true);else toast("agent state updated");
+  await renderAgents();
+}
+function openAgents(){
+  modal(`<h3>Agent coordination</h3><div class="b" id="agentBody"><div class="spin">loading agent state...</div></div>
+    <div class="f"><button class="btn" onclick="renderAgents()">Refresh</button><button class="btn go" onclick="closeModal()">Close</button></div>`,true);
+  renderAgents();
+}
+async function renderAgents(){
+  const body=$("agentBody"); if(!body)return;
+  const res=await agentFetch();
+  if(res.status==="disabled"||res.status==="unavailable"){
+    body.innerHTML=`<div class="desc">${esc(res.message||"cfgit-agent is not available")}</div>
+      <div class="desc">Enable <span class="mono">[agent]</span> and install <span class="mono">cfgit-agent</span> to see live sessions, leases, intents, conflicts, and events here.</div>`;
+    return;
+  }
+  if(res.status!=="ok"){
+    body.innerHTML=`<div class="desc">${esc(res.message||"could not load agent state")}</div>`;
+    return;
+  }
+  const data=res.data||{}, state=data.state||{}, events=data.events||[];
+  const sessions=state.sessions||[], leases=state.leases||[], intents=state.intents||[], conflicts=state.conflicts||[];
+  body.innerHTML=`<div class="agentbar">
+      <span class="chip open">enabled</span>
+      <span class="chip">${esc(data.backend||"memory")}</span>
+      <span class="mono" style="color:var(--dim)">coordination state lives beside cfgit history</span>
+    </div>
+    <div class="agentgrid">
+      ${agentSection("Sessions",sessions.map(agentSessionItem).join(""),"No sessions.")}
+      ${agentSection("Claims",leases.map(agentLeaseItem).join(""),"No leases.")}
+      ${agentSection("Intents",intents.map(agentIntentItem).join(""),"No intents.")}
+      ${agentSection("Conflicts",conflicts.map(agentConflictItem).join(""),"No conflicts.")}
+    </div>
+    ${agentSection("Event feed",events.slice().reverse().map(agentEventItem).join(""),"No events yet.")}`;
+  bindAgentActions();
+}
+function agentSection(title,html,empty){
+  return `<section class="agentsec"><h4>${esc(title)}</h4><div class="agentlist">${html||`<div class="agentempty">${esc(empty)}</div>`}</div></section>`;
+}
+function agentSessionItem(s){
+  const running=s.status==="running"||s.status==="blocked";
+  return `<div class="agentitem"><div class="agentmain"><div class="agenttitle">${esc(s.agent_id||s.session_id)}</div>
+    <div class="agentmeta"><span>${esc(s.status)}</span><span>${esc(s.task||"")}</span><span>${esc(s.session_id||"")}</span></div></div>
+    ${running?`<button class="agentact" data-agent-act="end_session" data-session="${esc(s.session_id)}">End</button>`:""}</div>`;
+}
+function agentLeaseItem(l){
+  const active=l.status==="active";
+  return `<div class="agentitem"><div class="agentmain"><div class="agenttitle">${esc(l.resource||"")}</div>
+    <div class="agentmeta"><span>${esc(l.status)}</span><span>${esc(l.session_id||"")}</span><span>expires ${esc(l.expires_at||"")}</span></div></div>
+    ${active?`<button class="agentact" data-agent-act="release" data-session="${esc(l.session_id)}" data-lease="${esc(l.lease_id)}">Release</button>`:""}</div>`;
+}
+function agentIntentItem(i){
+  const open=i.status==="open";
+  return `<div class="agentitem"><div class="agentmain"><div class="agenttitle">${esc(i.summary||i.intent_id)}</div>
+    <div class="agentmeta"><span>${esc(i.status)}</span><span>${esc((i.resources||[]).join(", "))}</span><span>${esc((i.planned_paths||[]).join(", "))}</span></div></div>
+    ${open?`<button class="agentact" data-agent-act="close_intent" data-session="${esc(i.session_id)}" data-intent="${esc(i.intent_id)}">Abandon</button>`:""}</div>`;
+}
+function agentConflictItem(c){
+  return `<div class="agentitem"><div class="agentmain"><div class="agenttitle">${esc(c.type||"conflict")} · ${esc(c.resource||"")}</div>
+    <div class="agentmeta"><span>${esc(c.status)}</span><span>${esc(c.message||"")}</span><span>${esc(c.conflict_id||"")}</span></div></div></div>`;
+}
+function agentEventItem(e){
+  return `<div class="agentitem"><div class="agentmain"><div class="agenttitle">${esc(e.event||"event")}</div>
+    <div class="agentmeta"><span>${esc(e.resource||"")}</span><span>${esc(e.actor||"")}</span><span>${esc(e.recorded_at||"")}</span></div></div></div>`;
+}
+function bindAgentActions(){
+  document.querySelectorAll("[data-agent-act]").forEach(b=>b.onclick=()=>{
+    const act=b.dataset.agentAct;
+    if(act==="end_session")agentAct("end_session",{session_id:b.dataset.session,status:"abandoned",summary:"ended from cfgit UI"});
+    if(act==="release")agentAct("release",{session_id:b.dataset.session,lease_id:b.dataset.lease});
+    if(act==="close_intent")agentAct("close_intent",{session_id:b.dataset.session,intent_id:b.dataset.intent,status:"abandoned"});
+  });
+}
+
 /* wiring */
 $("find").addEventListener("input",e=>{S.q=e.target.value;renderTree();});
 $("refresh").onclick=()=>{const keep=S.sel;loadState().then(()=>{if(keep)selectRecord(keep);});};
@@ -1223,6 +1414,7 @@ $("draftCommit").onclick=()=>openDraftCommit();
 $("branchDiff").onclick=()=>showBranchDiff();
 $("openPr").onclick=()=>openPrModal();
 $("mergePr").onclick=()=>openMergeModal();
+$("agents").onclick=()=>openAgents();
 loadState();
 </script>
 </body>
