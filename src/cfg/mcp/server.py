@@ -139,16 +139,26 @@ def cfg_impact(
 def cfg_commit(
     record: str,
     doc_json: str,
-    message: str,
+    message: str = "",
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
 ) -> dict[str, Any]:
+    """Commit a full document. Set dry_run=true to preview the field-level delta vs live and
+    get back state="would_commit" without writing (main-branch, single record)."""
     return _call(
         "commit",
-        {"record": record, "doc": doc_json, "message": message, "allow_secret": allow_secret, "branch": branch},
+        {
+            "record": record,
+            "doc": doc_json,
+            "message": message,
+            "allow_secret": allow_secret,
+            "branch": branch,
+            "dry_run": dry_run,
+        },
         config_file=config_file,
         env=env,
         author=author,
@@ -174,6 +184,35 @@ def cfg_bulk_commit(
     return _call(
         "bulk_commit",
         {"items": items, "message": message, "allow_secret": allow_secret, "branch": branch},
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
+def cfg_set(
+    record: str,
+    assignments: dict[str, Any] | list[dict[str, Any]] | str,
+    message: str = "",
+    allow_secret: bool = False,
+    dry_run: bool = False,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Edit scalar fields of a record in place. `assignments` is a mapping of dotted-path →
+    value (e.g. {"enabled": true, "retry.max": 3}). Routes through the drift-guarded commit
+    path — never a raw write. Set dry_run=true to preview without writing."""
+    return _call(
+        "set",
+        {
+            "record": record,
+            "assignments": assignments,
+            "message": message,
+            "allow_secret": allow_secret,
+            "dry_run": dry_run,
+        },
         config_file=config_file,
         env=env,
         author=author,
@@ -447,7 +486,8 @@ def _call(
     env: str,
     author: str | None,
 ) -> dict[str, Any]:
-    return actions.envelope(_call_inner, name, payload, config_file, env, author)
+    record = payload.get("record") if isinstance(payload, dict) else None
+    return actions.envelope(_call_inner, name, payload, config_file, env, author, record=record)
 
 
 def _call_inner(

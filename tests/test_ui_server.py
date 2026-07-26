@@ -61,6 +61,16 @@ def test_ui_contains_recent_activity_history() -> None:
     assert "Select a recent entry" in UI_HTML
 
 
+def test_ui_contains_remedy_card_surface() -> None:
+    from cfg.ui.server import UI_HTML
+
+    # the self-teaching remedy card + its render/copy wiring exist
+    assert 'id="remedy"' in UI_HTML
+    assert "function showRemedy" in UI_HTML
+    assert "res.next" in UI_HTML  # after()/afterBranch() surface the envelope's next block
+    assert "navigator.clipboard" in UI_HTML  # commands are copy-to-clipboard
+
+
 class _busy_port:
     def __enter__(self) -> int:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

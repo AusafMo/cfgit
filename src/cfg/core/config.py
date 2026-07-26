@@ -166,13 +166,24 @@ def load_config(path: str | Path | None = None) -> ProjectConfig:
 def _resolve_config_path(path: str | Path | None) -> Path:
     if path is not None:
         return Path(path).expanduser().resolve()
+    env_path = os.environ.get("CFG_CONFIG")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    # A local ./.cfg.toml always wins — this preserves prior behavior exactly.
     local = Path(".cfg.toml")
     if local.exists():
         return local.resolve()
+    # Otherwise walk up from cwd toward the filesystem root. This only ADDS discovery where the
+    # old code hard-failed; it never overrides a local config.
+    cwd = Path.cwd()
+    for parent in cwd.parents:
+        candidate = parent / ".cfg.toml"
+        if candidate.exists():
+            return candidate.resolve()
     example = Path("examples/.cfg.toml")
     if example.exists():
         return example.resolve()
-    raise FileNotFoundError("no .cfg.toml found")
+    raise FileNotFoundError("no .cfg.toml found (searched cwd and parent directories)")
 
 
 def _load_collection(data: dict[str, Any]) -> CollectionConfig:

@@ -17,6 +17,7 @@ from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
 from cfg.core.engine import BranchingDisabled, Engine, RecordRef, SecretBlocked
 from cfg.core.identity import IdentityError, hash_token, resolve_identity
+from cfg.core import remedy
 
 
 EXIT_OK = 0
@@ -35,8 +36,17 @@ def main(argv: list[str] | None = None) -> int:
     json_mode = "--json" in raw_argv
     raw_argv = [item for item in raw_argv if item != "--json"]
     explicit_ui_port = _has_option(raw_argv, "--port")
-    args = parser.parse_args(raw_argv)
-    args.json = bool(args.json or json_mode)
+    try:
+        args = parser.parse_args(raw_argv)
+    except SystemExit as exc:
+        if exc.code and any(_looks_like_global_flag(a) for a in raw_argv):
+            print(
+                "hint: global flags (--config-file/--env/--author/--branch/--json) go BEFORE the "
+                "subcommand, e.g. `cfg --env prod status`.",
+                file=sys.stderr,
+            )
+        raise
+    args.json = _resolve_json_mode(explicit_json=bool(args.json or json_mode))
     if args.cmd == "ui":
         from cfg.ui.server import run_ui
 
@@ -61,39 +71,40 @@ def main(argv: list[str] | None = None) -> int:
     try:
         project = load_config(args.config_file)
         engine = _engine(project, args.env, author=args.author)
+        _warn_open_mode(engine, args)
         result, code = _dispatch(engine, args)
-        _emit(result, json_mode=args.json)
+        _emit(result, json_mode=args.json, record=getattr(args, "record", None))
         return code
     except AmbiguousConfig as exc:
-        _emit_error("bad_config", str(exc), args)
+        _emit_error("bad_config", str(exc), args, exc=exc)
         return EXIT_INVARIANT
     except (StaleHead, StaleLive) as exc:
-        _emit_error("changed_outside_cfgit", str(exc), args)
+        _emit_error("changed_outside_cfgit", str(exc), args, exc=exc)
         return EXIT_DIRTY
     except PermissionDenied as exc:
-        _emit_error("forbidden", str(exc), args)
+        _emit_error("forbidden", str(exc), args, exc=exc)
         return EXIT_FORBIDDEN
     except IdentityError as exc:
-        _emit_error("identity_required", str(exc), args)
+        _emit_error("identity_required", str(exc), args, exc=exc)
         return EXIT_FORBIDDEN
     except AtomicityUnavailable as exc:
-        _emit_error("atomicity_unavailable", str(exc), args)
+        _emit_error("atomicity_unavailable", str(exc), args, exc=exc)
         return EXIT_STORAGE
     except NoSuchConfig as exc:
-        _emit_error("not_found", str(exc), args)
+        _emit_error("not_found", str(exc), args, exc=exc)
         return EXIT_NOT_FOUND
     except (BranchingDisabled, SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
-        _emit_error("error", str(exc), args)
+        _emit_error("error", str(exc), args, exc=exc)
         return EXIT_ARG
     except Exception as exc:  # pragma: no cover - final CLI guard
-        _emit_error("error", str(exc), args)
+        _emit_error("error", str(exc), args, exc=exc)
         return EXIT_STORAGE
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cfg")
-    parser.add_argument("--config-file", default=None)
-    parser.add_argument("--env", default="dev")
+    parser.add_argument("--config-file", default=os.environ.get("CFG_CONFIG"))
+    parser.add_argument("--env", default=os.environ.get("CFG_ENV", "dev"))
     parser.add_argument("--author", default=None)
     parser.add_argument("--branch", default=None)
     parser.add_argument("--json", action="store_true")
@@ -141,6 +152,8 @@ def _parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("record", nargs="?")
     p_doctor.add_argument("--large-field-bytes", type=int, default=20000,
                           help="flag string fields at or above this size (default 20000)")
+    p_doctor.add_argument("--status", action="store_true",
+                          help="print a situational-awareness header (config, env, db, identity, reachability, drift)")
 
     p_status = sub.add_parser("status")
     p_status.add_argument("record", nargs="?")
@@ -173,8 +186,26 @@ def _parser() -> argparse.ArgumentParser:
         dest="bulk_from_file",
         help="JSON file containing a list/map of record+doc items to commit as one batch intent",
     )
-    p_commit.add_argument("-m", "--message", required=True)
+    p_commit.add_argument("-m", "--message")
     p_commit.add_argument("--allow-secret", action="store_true")
+    p_commit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview the field-level delta vs live and exit without writing (main-branch, single record)",
+    )
+
+    p_set = sub.add_parser("set", help="edit scalar fields in place; routes through commit (drift-guarded)")
+    p_set.add_argument("record")
+    p_set.add_argument("assignments", nargs="+", metavar="field=value",
+                       help="dotted paths, JSON-coerced (enabled=true, n=5); str: forces a string (v=str:1.0)")
+    p_set.add_argument("-m", "--message")
+    p_set.add_argument("--allow-secret", action="store_true")
+    p_set.add_argument("--dry-run", action="store_true", help="preview the delta without writing")
+
+    p_edit = sub.add_parser("edit", help="open the live document in $EDITOR and commit the delta")
+    p_edit.add_argument("record")
+    p_edit.add_argument("-m", "--message")
+    p_edit.add_argument("--allow-secret", action="store_true")
 
     p_log = sub.add_parser("log")
     p_log.add_argument("record", nargs="?")
@@ -212,6 +243,31 @@ def _parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--port", type=int, default=8765)
     p_ui.add_argument("--no-open", action="store_true")
     return parser
+
+
+def _resolve_json_mode(*, explicit_json: bool, isatty: bool | None = None) -> bool:
+    """Decide whether output is machine JSON.
+
+    Precedence: explicit --json always wins; else CFG_OUTPUT (json|human|auto); else `auto`.
+    `auto` = human when stdout is a TTY, JSON when piped/redirected — so interactive users get
+    prose while pipelines keep parseable JSON with no flag.
+    """
+    if explicit_json:
+        return True
+    mode = (os.environ.get("CFG_OUTPUT") or "auto").strip().lower()
+    if mode == "json":
+        return True
+    if mode == "human":
+        return False
+    tty = sys.stdout.isatty() if isatty is None else isatty
+    return not tty  # auto: JSON when NOT a tty
+
+
+_GLOBAL_FLAGS = ("--config-file", "--env", "--author", "--branch")
+
+
+def _looks_like_global_flag(arg: str) -> bool:
+    return any(arg == g or arg.startswith(g + "=") for g in _GLOBAL_FLAGS)
 
 
 def _has_option(argv: list[str], name: str) -> bool:
@@ -280,6 +336,12 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         return rows, code
 
     if args.cmd == "doctor":
+        if getattr(args, "status", False):
+            from cfg.interfaces.actions import status_report
+
+            report, code = status_report(engine)
+            report["text"] = _format_status_report(report)
+            return report, code
         report = engine.doctor(
             _parse_record(args.record) if args.record else None,
             large_field_bytes=args.large_field_bytes,
@@ -321,6 +383,8 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         if args.bulk_from_file:
             if args.record or args.from_file:
                 raise ValueError("bulk commit uses --bulk-from without record or --from")
+            if not args.message:
+                raise ValueError("bulk commit needs -m/--message")
             from cfg.interfaces.actions import bulk_commit_exit_code, parse_bulk_commit_items
 
             items = parse_bulk_commit_items(_load_json_any(args.bulk_from_file))
@@ -341,6 +405,17 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         if not args.record or not args.from_file:
             raise ValueError("commit needs record and --from, or --bulk-from")
         doc = _load_json_file(args.from_file)
+        if getattr(args, "dry_run", False):
+            if branch != engine.config.branches.default_branch:
+                raise ValueError("--dry-run is only supported on the main-branch commit path")
+            result = engine.commit_preview(
+                _parse_record(args.record),
+                doc,
+                allow_secret=args.allow_secret,
+            )
+            return result, EXIT_OK
+        if not args.message:
+            raise ValueError("commit needs -m/--message")
         if branch != engine.config.branches.default_branch:
             result = engine.branch_commit(
                 branch,
@@ -356,6 +431,32 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
                 message=args.message,
                 allow_secret=args.allow_secret,
             )
+        code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
+        return result, code
+
+    if args.cmd == "set":
+        from cfg.interfaces.actions import parse_assignments, set_fields
+
+        if not args.dry_run and not args.message:
+            raise ValueError("set needs -m/--message (or --dry-run to preview)")
+        return set_fields(
+            engine,
+            args.record,
+            parse_assignments(args.assignments),
+            message=args.message or "(dry-run)",
+            allow_secret=args.allow_secret,
+            dry_run=args.dry_run,
+        )
+
+    if args.cmd == "edit":
+        if not args.message:
+            raise ValueError("edit needs -m/--message")
+        ref = _parse_record(args.record)
+        live = engine.adapter.get_record(ref.collection, ref.record_id)
+        if live is None:
+            raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
+        edited = _edit_in_editor(live)
+        result = engine.commit(ref, edited, message=args.message, allow_secret=args.allow_secret)
         code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
         return result, code
 
@@ -504,6 +605,52 @@ def _load_json_any(path: str) -> Any:
         return json.load(f)
 
 
+_MUTATING_CMDS = {"commit", "set", "edit", "adopt", "import", "restore"}
+
+
+def _warn_open_mode(engine: Engine, args: argparse.Namespace) -> None:
+    """Loud stderr warning when a mutating command runs against a needs_approval env still in
+    identity.mode="open" (writes succeed unaudited). Suppress with CFG_WARN_OPEN_MODE=0."""
+    if args.cmd not in _MUTATING_CMDS:
+        return
+    if os.environ.get("CFG_WARN_OPEN_MODE", "1") in ("0", "false", "no"):
+        return
+    env = engine.config.envs.get(engine.env)
+    if env is None:
+        return
+    if remedy.open_mode_on_guarded_env(needs_approval=env.needs_approval, identity_mode=env.identity.mode):
+        print(f"⚠ {remedy.OPEN_MODE_WARNING}", file=sys.stderr)
+
+
+def _edit_in_editor(doc: dict[str, Any]) -> dict[str, Any]:
+    """Write `doc` as pretty JSON to a temp file, open it in $EDITOR, and reparse on save."""
+    import subprocess
+    import tempfile
+
+    editor = os.environ.get("CFG_EDITOR") or os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tf:
+        tf.write(json.dumps(_to_json(doc), indent=2, sort_keys=True))
+        temp_path = tf.name
+    try:
+        proc = subprocess.run([*editor.split(), temp_path])
+        if proc.returncode != 0:
+            raise ValueError(f"editor '{editor}' exited with status {proc.returncode}; aborting edit")
+        with open(temp_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"edited document is not valid JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("edited document must be a JSON object")
+        return data
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
 def _parse_when(raw: str) -> datetime:
     value = raw.strip()
     date_only = len(value) == 10 and value[4] == "-" and value[7] == "-"
@@ -514,6 +661,20 @@ def _parse_when(raw: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _format_status_report(r: dict[str, Any]) -> str:
+    reach = "reachable" if r.get("reachable") else "UNREACHABLE"
+    lines = [
+        f"config:   {r.get('config_file')}",
+        f"env:      {r.get('env')} ({r.get('database')})   db: {r.get('db')}",
+        f"identity: mode={r.get('identity_mode')}  authenticated={str(r.get('authenticated')).lower()}  "
+        f"permission={r.get('permission_mode')}",
+        f"store:    {reach}   tracked: {r.get('tracked')}   drift: {r.get('drift')}",
+    ]
+    for warning in r.get("warnings") or []:
+        lines.append(f"⚠ {warning}")
+    return "\n".join(lines)
 
 
 def _format_doctor(report: dict[str, Any]) -> str:
@@ -572,25 +733,67 @@ def _format_doctor(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _emit(value: Any, *, json_mode: bool) -> None:
+def _emit(value: Any, *, json_mode: bool, record: str | None = None) -> None:
     if json_mode:
         print(json.dumps(_to_json(value), indent=2, sort_keys=True))
+        # remedy still goes to stderr so JSON stdout stays a clean parseable stream
+        _emit_result_remedy(value, record)
         return
     if isinstance(value, list):
         for item in value:
             print(_format_item(item))
+        _emit_result_remedy(value, record)
         return
-    if isinstance(value, dict) and "text" in value and ("changes" in value or "secret_blocks" in value):
+    if isinstance(value, dict) and "text" in value and ("changes" in value or "secret_blocks" in value or "reachable" in value):
         print(value["text"])
+        _emit_result_remedy(value, record)
         return
     print(_format_item(value))
+    _emit_result_remedy(value, record)
 
 
-def _emit_error(status: str, message: str, args: argparse.Namespace) -> None:
+def _emit_result_remedy(value: Any, record: str | None = None) -> None:
+    """After a terminal-state success/dirty result, print the self-teaching remedy to stderr
+    (kept off stdout so piped output stays clean)."""
+    state = None
+    rec = record
+    if isinstance(value, dict):
+        state = value.get("state")
+        rec = _record_from_dict(value) or record
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and item.get("state") in {"changed_outside_cfgit", "missing", "failed"}:
+                state = item.get("state")
+                rec = _record_from_dict(item) or record
+                break
+    if not state:
+        return
+    nxt = remedy.next_for(state=state, record=rec)
+    if nxt:
+        print(remedy.render_text(nxt), file=sys.stderr)
+
+
+def _record_from_dict(value: dict[str, Any]) -> str | None:
+    coll = value.get("collection")
+    rid = value.get("record_id")
+    if coll and rid:
+        return f"{coll}:{rid}"
+    return None
+
+
+def _emit_error(status: str, message: str, args: argparse.Namespace, *, exc: Exception | None = None) -> None:
     if getattr(args, "json", False):
         print(json.dumps({"status": status, "message": message}, indent=2), file=sys.stderr)
     else:
         print(f"{status}: {message}", file=sys.stderr)
+    nxt = remedy.next_for(
+        status=status,
+        error_class=exc.__class__.__name__ if exc else None,
+        record=getattr(args, "record", None),
+        message=message,
+    )
+    if nxt:
+        print(remedy.render_text(nxt), file=sys.stderr)
 
 
 def _format_item(value: Any) -> str:

@@ -73,7 +73,7 @@ class CfgUIHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             name = str(payload.get("action") or "")
             engine = actions.make_engine(self._ctx(payload))
-            result = actions.envelope(_run_action, name, engine, payload)
+            result = actions.envelope(_run_action, name, engine, payload, record=payload.get("record"))
             self._send_json(result)
         except Exception as exc:
             self._send_json(
@@ -543,6 +543,21 @@ UI_HTML = r"""<!doctype html>
     .toast.err{border-color:var(--paper-del-ink)}
     .toast .ok{color:var(--moss)} .toast .bad{color:var(--paper-del-ink)}
 
+    /* self-teaching remedy card: shown when an action result carries `next` */
+    .remedy{position:fixed;bottom:20px;right:20px;max-width:440px;background:var(--panel2);
+      border:1px solid var(--amber);border-radius:10px;padding:12px 14px;font-size:12.5px;z-index:61;
+      box-shadow:var(--shadow);opacity:0;transform:translateY(8px);transition:all .18s;pointer-events:none}
+    .remedy.show{opacity:1;transform:translateY(0);pointer-events:auto}
+    .remedy .rw{color:var(--ink);margin-bottom:5px}
+    .remedy .rr{color:var(--faint);margin-bottom:8px}
+    .remedy .rc{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--edge2);
+      border-radius:6px;padding:4px 8px;margin:4px 0;font-family:ui-monospace,monospace;font-size:11.5px}
+    .remedy .rc code{flex:1;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .remedy .rc .cp{cursor:pointer;color:var(--sky);flex:0 0 auto;border:none;background:none;font-size:11px}
+    .remedy .rc .cp:hover{color:var(--ink)}
+    .remedy .rx{position:absolute;top:8px;right:10px;cursor:pointer;color:var(--faint);border:none;background:none}
+    .remedy .rx:hover{color:var(--ink)}
+
     .mbg{position:fixed;inset:0;background:rgba(8,11,16,.6);backdrop-filter:blur(2px);display:none;
       align-items:center;justify-content:center;z-index:50}
     .mbg.show{display:flex}
@@ -644,6 +659,7 @@ UI_HTML = r"""<!doctype html>
     </div>
   </div>
   <div class="toast" id="toast"></div>
+  <div class="remedy" id="remedy"></div>
   <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
 
 <script>
@@ -665,6 +681,12 @@ function env(){return{env:$("env").value||"dev",branch:$("branch").value||"main"
 function qs(){const p=new URLSearchParams(),e=env();if(e.env)p.set("env",e.env);if(e.config_file)p.set("config_file",e.config_file);return p.toString();}
 async function api(action,data){const r=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...env(),...data})});return r.json();}
 function toast(msg,bad){const t=$("toast");t.innerHTML=`<span class="${bad?"bad":"ok"}">${bad?"✕":"✓"}</span>${esc(msg)}`;t.className="toast show"+(bad?" err":"");clearTimeout(t._t);t._t=setTimeout(()=>t.className="toast",2400);}
+function showRemedy(nx){const r=$("remedy");if(!nx){r.className="remedy";return;}
+  const cmds=(nx.commands||[]).map(c=>`<div class="rc"><code title="${esc(c)}">${esc(c)}</code><button class="cp" onclick="navigator.clipboard&&navigator.clipboard.writeText(this.previousElementSibling.textContent);this.textContent='copied'">copy</button></div>`).join("");
+  r.innerHTML=`<button class="rx" onclick="$('remedy').className='remedy'">✕</button>`+
+    `<div class="rw">${esc(nx.why||"")}</div><div class="rr">→ ${esc(nx.remedy||"")}</div>${cmds}`+
+    (nx.docs?`<div class="rr" style="margin-top:6px">Docs: ${esc(nx.docs)}</div>`:"");
+  r.className="remedy show";}
 function initials(s){s=String(s||"");const at=s.indexOf("@");const h=at>0?s.slice(0,at):s;return (h.replace(/[^a-zA-Z0-9]/g,"").slice(0,2)||"··").toLowerCase();}
 
 /* theme */
@@ -679,7 +701,10 @@ async function loadState(){
     const disp=w.identity_display||w.author||"";
     $("whoTxt").innerHTML=`<b>${esc(disp)}</b> · ${esc(w.env||"dev")}`;
     $("ava").textContent=initials(w.author||disp);
-    $("mode").textContent=w.identity_mode||id.mode||"open";}
+    $("mode").textContent=w.identity_mode||id.mode||"open";
+    const mel=$("mode");if(mel){mel.classList.toggle("warn",!!w.open_mode_warning);mel.title=w.open_mode_warning||"";}
+    if(w.open_mode_warning&&!S._warnedOpen){S._warnedOpen=true;
+      showRemedy({why:"This env writes UNAUDITED.",remedy:w.open_mode_warning,commands:[],docs:"IDENTITY_AND_ATTRIBUTION.md"});}}
   // populate env options from schema
   const sc=await fetch("/api/schema?"+qs()).then(r=>r.json()).catch(()=>null);
   if(sc&&sc.data&&Array.isArray(sc.data.envs)&&sc.data.envs.length){
@@ -1177,6 +1202,7 @@ function openMergeModal(){
 async function afterBranch(res,verb,nextBranch){closeModal();
   const ok=res&&res.status==="ok";
   toast(ok?verb:(res&&res.message?res.message:verb+" failed"),!ok);
+  showRemedy(res&&res.next);
   await loadState();
   if(ok&&nextBranch&&[...$("branch").options].some(o=>o.value===nextBranch))$("branch").value=nextBranch;
   renderBranches();
@@ -1184,6 +1210,7 @@ async function afterBranch(res,verb,nextBranch){closeModal();
 async function after(res,verb){closeModal();
   const ok=res&&(res.status==="ok"||(res.data&&(res.data.oid||res.data.seq)));
   toast(ok?verb:(res&&res.message?res.message:verb+" failed"),!ok);
+  showRemedy(res&&res.next);
   const keep=S.sel;await loadState();if(keep)selectRecord(keep);}
 
 /* wiring */

@@ -14,6 +14,7 @@ from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
 from cfg.core.engine import BranchingDisabled, Engine, RecordRef, SecretBlocked
 from cfg.core.identity import IdentityError, resolve_identity, resolve_self_asserted_author
+from cfg.core import remedy
 
 
 @dataclass(frozen=True)
@@ -56,27 +57,29 @@ def engine_for_project(project: ProjectConfig, *, env_name: str, author: str | N
     return Engine(project, adapter, env=env_name, identity=identity)
 
 
-def envelope(fn, *args, **kwargs) -> dict[str, Any]:
+def envelope(fn, *args, record: str | None = None, **kwargs) -> dict[str, Any]:
     try:
         data, code = fn(*args, **kwargs)
         status = "ok" if code == EXIT_OK else "dirty" if code == EXIT_DIRTY else "error"
-        return {"status": status, "code": code, "message": "", "data": to_json(data)}
+        env = {"status": status, "code": code, "message": "", "data": to_json(data)}
+        _attach_next(env, record=record)
+        return env
     except AmbiguousConfig as exc:
-        return _error("bad_config", EXIT_INVARIANT, exc)
+        return _error("bad_config", EXIT_INVARIANT, exc, record=record)
     except (StaleHead, StaleLive) as exc:
-        return _error("changed_outside_cfgit", EXIT_DIRTY, exc)
+        return _error("changed_outside_cfgit", EXIT_DIRTY, exc, record=record)
     except PermissionDenied as exc:
-        return _error("forbidden", EXIT_FORBIDDEN, exc)
+        return _error("forbidden", EXIT_FORBIDDEN, exc, record=record)
     except IdentityError as exc:
-        return _error("identity_required", EXIT_FORBIDDEN, exc)
+        return _error("identity_required", EXIT_FORBIDDEN, exc, record=record)
     except AtomicityUnavailable as exc:
-        return _error("atomicity_unavailable", EXIT_STORAGE, exc)
+        return _error("atomicity_unavailable", EXIT_STORAGE, exc, record=record)
     except NoSuchConfig as exc:
-        return _error("not_found", EXIT_NOT_FOUND, exc)
+        return _error("not_found", EXIT_NOT_FOUND, exc, record=record)
     except (BranchingDisabled, SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
-        return _error("error", EXIT_ARG, exc)
+        return _error("error", EXIT_ARG, exc, record=record)
     except Exception as exc:
-        return _error("error", EXIT_STORAGE, exc)
+        return _error("error", EXIT_STORAGE, exc, record=record)
 
 
 def whoami(engine: Engine) -> tuple[dict[str, Any], int]:
@@ -90,6 +93,10 @@ def whoami(engine: Engine) -> tuple[dict[str, Any], int]:
         "permission_role": permission_role(env.permissions, engine.author),
         "permission_mode": env.permissions.mode,
         "identity_mode": env.identity.mode,
+        "needs_approval": env.needs_approval,
+        "open_mode_warning": remedy.OPEN_MODE_WARNING
+        if remedy.open_mode_on_guarded_env(needs_approval=env.needs_approval, identity_mode=env.identity.mode)
+        else None,
         "config_file": str(engine.config.path),
     }, EXIT_OK
 
@@ -97,7 +104,50 @@ def whoami(engine: Engine) -> tuple[dict[str, Any], int]:
 def init(engine: Engine) -> tuple[dict[str, Any], int]:
     result = engine.init()
     violations = result["invariant_violations"]
-    return plain_init(result), EXIT_INVARIANT if violations else EXIT_OK
+    out = plain_init(result)
+    warnings = _env_warnings(engine)
+    if warnings:
+        out["warnings"] = warnings
+    return out, EXIT_INVARIANT if violations else EXIT_OK
+
+
+def status_report(engine: Engine) -> tuple[dict[str, Any], int]:
+    """Situational-awareness header: which config/env/db am I on, is my identity verified, is the
+    store reachable, how many records are tracked, how many drifted, and any env-shape warnings."""
+    env = engine.config.envs[engine.env]
+    reachable = True
+    tracked = 0
+    drift = 0
+    try:
+        rows = engine.status()
+        tracked = sum(1 for r in rows if r.state != "new")
+        drift = sum(1 for r in rows if r.state == "changed_outside_cfgit")
+    except Exception:  # noqa: BLE001 - reachability probe, any failure means "can't reach store"
+        reachable = False
+    identity_meta = engine.identity.history_meta() if engine.identity else {}
+    report = {
+        "config_file": str(engine.config.path),
+        "env": engine.env,
+        "database": env.database,
+        "db": env.db,
+        "identity_mode": env.identity.mode,
+        "authenticated": bool(identity_meta.get("authenticated")),
+        "permission_mode": env.permissions.mode,
+        "needs_approval": env.needs_approval,
+        "reachable": reachable,
+        "tracked": tracked,
+        "drift": drift,
+        "warnings": _env_warnings(engine),
+    }
+    return report, EXIT_OK
+
+
+def _env_warnings(engine: Engine) -> list[str]:
+    env = engine.config.envs[engine.env]
+    warnings: list[str] = []
+    if remedy.open_mode_on_guarded_env(needs_approval=env.needs_approval, identity_mode=env.identity.mode):
+        warnings.append(remedy.OPEN_MODE_WARNING)
+    return warnings
 
 
 def status(engine: Engine, record: str | None = None) -> tuple[list[Any], int]:
@@ -146,13 +196,88 @@ def commit(
     message: str,
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
 ) -> tuple[dict[str, Any], int]:
-    if branch and branch != engine.config.branches.default_branch:
+    on_branch = bool(branch and branch != engine.config.branches.default_branch)
+    if dry_run:
+        if on_branch:
+            raise ValueError("--dry-run is only supported on the main-branch commit path")
+        result = engine.commit_preview(parse_record(record), doc, allow_secret=allow_secret)
+    elif on_branch:
         result = engine.branch_commit(branch, parse_record(record), doc, message=message, allow_secret=allow_secret)
     else:
         result = engine.commit(parse_record(record), doc, message=message, allow_secret=allow_secret)
     code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
     return result, code
+
+
+def set_fields(
+    engine: Engine,
+    record: str,
+    assignments: list[tuple[str, Any]],
+    *,
+    message: str,
+    allow_secret: bool = False,
+    dry_run: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """Fast-path scalar edit: fetch live, apply dotted assignments, route through the SAME
+    commit path (drift guard + secret scan + history) — never a raw write."""
+    ref = parse_record(record)
+    if not assignments:
+        raise ValueError("set needs at least one field=value")
+    doc = engine.build_commit_doc(ref, assignments)
+    if dry_run:
+        result = engine.commit_preview(ref, doc, allow_secret=allow_secret)
+        return result, EXIT_OK
+    result = engine.commit(ref, doc, message=message, allow_secret=allow_secret)
+    code = EXIT_DIRTY if result.get("state") == "changed_outside_cfgit" else EXIT_OK
+    return result, code
+
+
+def parse_assignments(pairs: list[str]) -> list[tuple[str, Any]]:
+    """Parse `field=value` tokens. Values are JSON-coerced (true/5/["a"] type naturally); a
+    `str:` prefix forces a string literal (e.g. version=str:1.0)."""
+    out: list[tuple[str, Any]] = []
+    for pair in pairs:
+        if "=" not in pair:
+            raise ValueError(f"expected field=value, got {pair!r}")
+        field, raw = pair.split("=", 1)
+        field = field.strip()
+        if not field:
+            raise ValueError(f"empty field name in {pair!r}")
+        out.append((field, _coerce_value(raw)))
+    return out
+
+
+def _coerce_value(raw: str) -> Any:
+    if raw.startswith("str:"):
+        return raw[4:]
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+
+
+def _assignments_from_payload(value: Any) -> list[tuple[str, Any]]:
+    """Accept assignments as a dict {path: typed_value} (MCP), a list of `field=value` strings
+    (CLI), or a JSON string of either."""
+    if value is None:
+        raise ValueError("set needs assignments")
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict):
+        return [(str(k), v) for k, v in value.items()]
+    if isinstance(value, list):
+        if all(isinstance(item, str) for item in value):
+            return parse_assignments(value)
+        # list of {field, value} objects
+        out: list[tuple[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict) or "field" not in item:
+                raise ValueError("each assignment needs a 'field' (and 'value')")
+            out.append((str(item["field"]), item.get("value")))
+        return out
+    raise ValueError("assignments must be a mapping, a list, or a JSON string")
 
 
 def bulk_commit(
@@ -366,6 +491,16 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             message=str(payload.get("message") or "commit"),
             allow_secret=bool(payload.get("allow_secret")),
             branch=_blank_to_none(payload.get("branch")),
+            dry_run=bool(payload.get("dry_run")),
+        )
+    if name == "set":
+        return set_fields(
+            engine,
+            _required(payload, "record"),
+            _assignments_from_payload(payload.get("assignments")),
+            message=str(payload.get("message") or "set fields"),
+            allow_secret=bool(payload.get("allow_secret")),
+            dry_run=bool(payload.get("dry_run")),
         )
     if name in {"bulk_commit", "commit_many"}:
         return bulk_commit(
@@ -600,5 +735,48 @@ def _blank_to_none(value: Any) -> str | None:
     return text or None
 
 
-def _error(status: str, code: int, exc: Exception) -> dict[str, Any]:
-    return {"status": status, "code": code, "message": str(exc), "data": None}
+def _error(status: str, code: int, exc: Exception, *, record: str | None = None) -> dict[str, Any]:
+    env = {"status": status, "code": code, "message": str(exc), "data": None}
+    nxt = remedy.next_for(
+        status=status,
+        code=code,
+        error_class=exc.__class__.__name__,
+        record=record,
+        message=str(exc),
+    )
+    env["state"] = None
+    env["next"] = nxt.to_json() if nxt else None
+    return env
+
+
+def _attach_next(env: dict[str, Any], *, record: str | None) -> None:
+    """Additively attach a top-level `state` echo and a `next` remedy to a success/dirty
+    envelope. Both may be None. The record for `{record}` substitution is taken from the
+    result payload when present, else the caller's hint."""
+    data = env.get("data")
+    state = None
+    payload_record = record
+    if isinstance(data, dict):
+        state = data.get("state")
+        payload_record = _record_from(data) or record
+    elif isinstance(data, list):
+        # batch results (adopt --all, bulk): surface the first actionable state, if any
+        for item in data:
+            if isinstance(item, dict) and item.get("state") in _ACTIONABLE_LIST_STATES:
+                state = item.get("state")
+                payload_record = _record_from(item) or record
+                break
+    env["state"] = state
+    nxt = remedy.next_for(status=env.get("status"), code=env.get("code"), state=state, record=payload_record)
+    env["next"] = nxt.to_json() if nxt else None
+
+
+_ACTIONABLE_LIST_STATES = {"changed_outside_cfgit", "missing", "failed", "blocked"}
+
+
+def _record_from(item: dict[str, Any]) -> str | None:
+    coll = item.get("collection")
+    rid = item.get("record_id")
+    if coll and rid:
+        return f"{coll}:{rid}"
+    return None
