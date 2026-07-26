@@ -381,8 +381,15 @@ cfg restore --as-of <date> --dry-run -m "message"
 cfg restore --tag <name> --dry-run -m "message"
 cfg fsck
 cfg whoami
+cfg check-update [--snooze [DAYS]]
 cfg ui
 ```
+
+cfgit checks PyPI for a newer release on cheap read commands (throttled to once a day) and, for an
+interactive terminal, prints a one-line nudge to stderr with what's new — it never upgrades for
+you (run `pip install -U cfgit`) and never prints on `--json`/piped output. `cfg check-update`
+forces a check; `cfg check-update --snooze 30` silences it for 30 days; `CFGIT_NO_UPDATE_CHECK=1`
+disables it entirely.
 
 Every command supports `--json` for scripts and agents. By default output is human-readable
 when stdout is a terminal and JSON when piped or redirected; set `CFG_OUTPUT=json|human|auto`
@@ -511,6 +518,7 @@ Tools include:
 - `cfg_whoami`
 - `cfg_init`
 - `cfg_identity_hash`
+- `cfg_check_update`
 
 A portable skill lives at `skills/cfgit/SKILL.md`.
 `cfg_impact` accepts the same `against` list/string as the CLI `--against` flag,
