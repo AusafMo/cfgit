@@ -17,6 +17,7 @@ from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
 from cfg.core.engine import BranchingDisabled, Engine, RecordRef, SecretBlocked
 from cfg.core.identity import IdentityError, hash_token, resolve_identity
+from cfg.core import remedy
 
 
 EXIT_OK = 0
@@ -65,28 +66,28 @@ def main(argv: list[str] | None = None) -> int:
         _emit(result, json_mode=args.json)
         return code
     except AmbiguousConfig as exc:
-        _emit_error("bad_config", str(exc), args)
+        _emit_error("bad_config", str(exc), args, exc=exc)
         return EXIT_INVARIANT
     except (StaleHead, StaleLive) as exc:
-        _emit_error("changed_outside_cfgit", str(exc), args)
+        _emit_error("changed_outside_cfgit", str(exc), args, exc=exc)
         return EXIT_DIRTY
     except PermissionDenied as exc:
-        _emit_error("forbidden", str(exc), args)
+        _emit_error("forbidden", str(exc), args, exc=exc)
         return EXIT_FORBIDDEN
     except IdentityError as exc:
-        _emit_error("identity_required", str(exc), args)
+        _emit_error("identity_required", str(exc), args, exc=exc)
         return EXIT_FORBIDDEN
     except AtomicityUnavailable as exc:
-        _emit_error("atomicity_unavailable", str(exc), args)
+        _emit_error("atomicity_unavailable", str(exc), args, exc=exc)
         return EXIT_STORAGE
     except NoSuchConfig as exc:
-        _emit_error("not_found", str(exc), args)
+        _emit_error("not_found", str(exc), args, exc=exc)
         return EXIT_NOT_FOUND
     except (BranchingDisabled, SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
-        _emit_error("error", str(exc), args)
+        _emit_error("error", str(exc), args, exc=exc)
         return EXIT_ARG
     except Exception as exc:  # pragma: no cover - final CLI guard
-        _emit_error("error", str(exc), args)
+        _emit_error("error", str(exc), args, exc=exc)
         return EXIT_STORAGE
 
 
@@ -579,18 +580,57 @@ def _emit(value: Any, *, json_mode: bool) -> None:
     if isinstance(value, list):
         for item in value:
             print(_format_item(item))
+        _emit_result_remedy(value)
         return
     if isinstance(value, dict) and "text" in value and ("changes" in value or "secret_blocks" in value):
         print(value["text"])
         return
     print(_format_item(value))
+    _emit_result_remedy(value)
 
 
-def _emit_error(status: str, message: str, args: argparse.Namespace) -> None:
+def _emit_result_remedy(value: Any) -> None:
+    """After a terminal-state success/dirty result, print the self-teaching remedy to stderr
+    (kept off stdout so piped output stays clean)."""
+    state = None
+    record = None
+    if isinstance(value, dict):
+        state = value.get("state")
+        record = _record_from_dict(value)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and item.get("state") in {"changed_outside_cfgit", "missing", "failed"}:
+                state = item.get("state")
+                record = _record_from_dict(item)
+                break
+    if not state:
+        return
+    nxt = remedy.next_for(state=state, record=record)
+    if nxt:
+        print(remedy.render_text(nxt), file=sys.stderr)
+
+
+def _record_from_dict(value: dict[str, Any]) -> str | None:
+    coll = value.get("collection")
+    rid = value.get("record_id")
+    if coll and rid:
+        return f"{coll}:{rid}"
+    return None
+
+
+def _emit_error(status: str, message: str, args: argparse.Namespace, *, exc: Exception | None = None) -> None:
     if getattr(args, "json", False):
         print(json.dumps({"status": status, "message": message}, indent=2), file=sys.stderr)
     else:
         print(f"{status}: {message}", file=sys.stderr)
+    nxt = remedy.next_for(
+        status=status,
+        error_class=exc.__class__.__name__ if exc else None,
+        record=getattr(args, "record", None),
+        message=message,
+    )
+    if nxt:
+        print(remedy.render_text(nxt), file=sys.stderr)
 
 
 def _format_item(value: Any) -> str:

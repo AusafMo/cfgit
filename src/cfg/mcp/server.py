@@ -447,7 +447,8 @@ def _call(
     env: str,
     author: str | None,
 ) -> dict[str, Any]:
-    return actions.envelope(_call_inner, name, payload, config_file, env, author)
+    record = payload.get("record") if isinstance(payload, dict) else None
+    return actions.envelope(_call_inner, name, payload, config_file, env, author, record=record)
 
 
 def _call_inner(

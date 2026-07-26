@@ -14,6 +14,7 @@ from cfg.core.config import ProjectConfig, load_config
 from cfg.core.diff import format_diff
 from cfg.core.engine import BranchingDisabled, Engine, RecordRef, SecretBlocked
 from cfg.core.identity import IdentityError, resolve_identity, resolve_self_asserted_author
+from cfg.core import remedy
 
 
 @dataclass(frozen=True)
@@ -56,27 +57,29 @@ def engine_for_project(project: ProjectConfig, *, env_name: str, author: str | N
     return Engine(project, adapter, env=env_name, identity=identity)
 
 
-def envelope(fn, *args, **kwargs) -> dict[str, Any]:
+def envelope(fn, *args, record: str | None = None, **kwargs) -> dict[str, Any]:
     try:
         data, code = fn(*args, **kwargs)
         status = "ok" if code == EXIT_OK else "dirty" if code == EXIT_DIRTY else "error"
-        return {"status": status, "code": code, "message": "", "data": to_json(data)}
+        env = {"status": status, "code": code, "message": "", "data": to_json(data)}
+        _attach_next(env, record=record)
+        return env
     except AmbiguousConfig as exc:
-        return _error("bad_config", EXIT_INVARIANT, exc)
+        return _error("bad_config", EXIT_INVARIANT, exc, record=record)
     except (StaleHead, StaleLive) as exc:
-        return _error("changed_outside_cfgit", EXIT_DIRTY, exc)
+        return _error("changed_outside_cfgit", EXIT_DIRTY, exc, record=record)
     except PermissionDenied as exc:
-        return _error("forbidden", EXIT_FORBIDDEN, exc)
+        return _error("forbidden", EXIT_FORBIDDEN, exc, record=record)
     except IdentityError as exc:
-        return _error("identity_required", EXIT_FORBIDDEN, exc)
+        return _error("identity_required", EXIT_FORBIDDEN, exc, record=record)
     except AtomicityUnavailable as exc:
-        return _error("atomicity_unavailable", EXIT_STORAGE, exc)
+        return _error("atomicity_unavailable", EXIT_STORAGE, exc, record=record)
     except NoSuchConfig as exc:
-        return _error("not_found", EXIT_NOT_FOUND, exc)
+        return _error("not_found", EXIT_NOT_FOUND, exc, record=record)
     except (BranchingDisabled, SecretBlocked, ValueError, FileNotFoundError, KeyError) as exc:
-        return _error("error", EXIT_ARG, exc)
+        return _error("error", EXIT_ARG, exc, record=record)
     except Exception as exc:
-        return _error("error", EXIT_STORAGE, exc)
+        return _error("error", EXIT_STORAGE, exc, record=record)
 
 
 def whoami(engine: Engine) -> tuple[dict[str, Any], int]:
@@ -600,5 +603,48 @@ def _blank_to_none(value: Any) -> str | None:
     return text or None
 
 
-def _error(status: str, code: int, exc: Exception) -> dict[str, Any]:
-    return {"status": status, "code": code, "message": str(exc), "data": None}
+def _error(status: str, code: int, exc: Exception, *, record: str | None = None) -> dict[str, Any]:
+    env = {"status": status, "code": code, "message": str(exc), "data": None}
+    nxt = remedy.next_for(
+        status=status,
+        code=code,
+        error_class=exc.__class__.__name__,
+        record=record,
+        message=str(exc),
+    )
+    env["state"] = None
+    env["next"] = nxt.to_json() if nxt else None
+    return env
+
+
+def _attach_next(env: dict[str, Any], *, record: str | None) -> None:
+    """Additively attach a top-level `state` echo and a `next` remedy to a success/dirty
+    envelope. Both may be None. The record for `{record}` substitution is taken from the
+    result payload when present, else the caller's hint."""
+    data = env.get("data")
+    state = None
+    payload_record = record
+    if isinstance(data, dict):
+        state = data.get("state")
+        payload_record = _record_from(data) or record
+    elif isinstance(data, list):
+        # batch results (adopt --all, bulk): surface the first actionable state, if any
+        for item in data:
+            if isinstance(item, dict) and item.get("state") in _ACTIONABLE_LIST_STATES:
+                state = item.get("state")
+                payload_record = _record_from(item) or record
+                break
+    env["state"] = state
+    nxt = remedy.next_for(status=env.get("status"), code=env.get("code"), state=state, record=payload_record)
+    env["next"] = nxt.to_json() if nxt else None
+
+
+_ACTIONABLE_LIST_STATES = {"changed_outside_cfgit", "missing", "failed", "blocked"}
+
+
+def _record_from(item: dict[str, Any]) -> str | None:
+    coll = item.get("collection")
+    rid = item.get("record_id")
+    if coll and rid:
+        return f"{coll}:{rid}"
+    return None
