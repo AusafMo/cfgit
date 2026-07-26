@@ -73,7 +73,7 @@ class CfgUIHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             name = str(payload.get("action") or "")
             engine = actions.make_engine(self._ctx(payload))
-            result = actions.envelope(_run_action, name, engine, payload)
+            result = actions.envelope(_run_action, name, engine, payload, record=payload.get("record"))
             self._send_json(result)
         except Exception as exc:
             self._send_json(

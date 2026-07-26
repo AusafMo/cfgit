@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         engine = _engine(project, args.env, author=args.author)
         _warn_open_mode(engine, args)
         result, code = _dispatch(engine, args)
-        _emit(result, json_mode=args.json)
+        _emit(result, json_mode=args.json, record=getattr(args, "record", None))
         return code
     except AmbiguousConfig as exc:
         _emit_error("bad_config", str(exc), args, exc=exc)
@@ -733,39 +733,42 @@ def _format_doctor(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _emit(value: Any, *, json_mode: bool) -> None:
+def _emit(value: Any, *, json_mode: bool, record: str | None = None) -> None:
     if json_mode:
         print(json.dumps(_to_json(value), indent=2, sort_keys=True))
+        # remedy still goes to stderr so JSON stdout stays a clean parseable stream
+        _emit_result_remedy(value, record)
         return
     if isinstance(value, list):
         for item in value:
             print(_format_item(item))
-        _emit_result_remedy(value)
+        _emit_result_remedy(value, record)
         return
     if isinstance(value, dict) and "text" in value and ("changes" in value or "secret_blocks" in value or "reachable" in value):
         print(value["text"])
+        _emit_result_remedy(value, record)
         return
     print(_format_item(value))
-    _emit_result_remedy(value)
+    _emit_result_remedy(value, record)
 
 
-def _emit_result_remedy(value: Any) -> None:
+def _emit_result_remedy(value: Any, record: str | None = None) -> None:
     """After a terminal-state success/dirty result, print the self-teaching remedy to stderr
     (kept off stdout so piped output stays clean)."""
     state = None
-    record = None
+    rec = record
     if isinstance(value, dict):
         state = value.get("state")
-        record = _record_from_dict(value)
+        rec = _record_from_dict(value) or record
     elif isinstance(value, list):
         for item in value:
             if isinstance(item, dict) and item.get("state") in {"changed_outside_cfgit", "missing", "failed"}:
                 state = item.get("state")
-                record = _record_from_dict(item)
+                rec = _record_from_dict(item) or record
                 break
     if not state:
         return
-    nxt = remedy.next_for(state=state, record=record)
+    nxt = remedy.next_for(state=state, record=rec)
     if nxt:
         print(remedy.render_text(nxt), file=sys.stderr)
 
