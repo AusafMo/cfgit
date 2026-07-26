@@ -187,3 +187,46 @@ def test_cli_nudge_gating(monkeypatch, capsys, cmd, json_mode, isatty, expect_nu
     captured = capsys.readouterr()
     assert ("available" in captured.err) is expect_nudge
     assert captured.out == ""  # the nudge must NEVER touch stdout, in any case
+
+
+# --- `cfg check-update` renders human prose, not a JSON dump (regression) --------------------
+
+
+def test_check_update_human_prints_sentence_not_json(monkeypatch, capsys):
+    """Up-to-date `cfg check-update` must print a readable line in human mode, not raw JSON."""
+    import types
+
+    monkeypatch.setattr(
+        update, "check",
+        lambda *a, **k: types.SimpleNamespace(
+            installed="0.4.0", disabled=False, message=None, to_json=lambda: {}
+        ),
+    )
+    from cfg.cli.main import main
+
+    rc = main(["check-update"])  # no --json; capsys is not a TTY → auto picks JSON... so force human
+    _ = capsys.readouterr()
+    # explicit human mode via env is the real contract:
+    monkeypatch.setenv("CFG_OUTPUT", "human")
+    main(["check-update"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "up to date" in out
+    assert not out.strip().startswith("{")  # never a JSON dump
+
+
+def test_check_update_json_is_structured(monkeypatch, capsys):
+    import types
+
+    monkeypatch.setattr(
+        update, "check",
+        lambda *a, **k: types.SimpleNamespace(
+            installed="0.4.0", disabled=False, message=None,
+            to_json=lambda: {"installed": "0.4.0", "update_available": False},
+        ),
+    )
+    from cfg.cli.main import main
+
+    main(["--json", "check-update"])
+    out = capsys.readouterr().out
+    assert '"installed"' in out and out.strip().startswith("{")

@@ -72,9 +72,21 @@ def main(argv: list[str] | None = None) -> int:
         from cfg import update
 
         if args.snooze is not None:
-            _emit(update.snooze(args.snooze), json_mode=args.json)
+            result = update.snooze(args.snooze)
+            if args.json:
+                _emit(result, json_mode=True)
+            else:
+                print(f"Update reminders snoozed for {result['days']} days.")
             return EXIT_OK
-        _emit(update.check(force=True).to_json(), json_mode=args.json)
+        status = update.check(force=True)
+        if args.json:
+            _emit(status.to_json(), json_mode=True)
+        elif status.disabled:
+            print(f"Update check is disabled (CFGIT_NO_UPDATE_CHECK is set). Installed: {status.installed}.")
+        elif status.message:
+            print(status.message)
+        else:
+            print(f"cfgit {status.installed} is up to date.")
         return EXIT_OK
     try:
         project = load_config(args.config_file)
