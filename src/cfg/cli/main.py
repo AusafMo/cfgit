@@ -36,7 +36,16 @@ def main(argv: list[str] | None = None) -> int:
     json_mode = "--json" in raw_argv
     raw_argv = [item for item in raw_argv if item != "--json"]
     explicit_ui_port = _has_option(raw_argv, "--port")
-    args = parser.parse_args(raw_argv)
+    try:
+        args = parser.parse_args(raw_argv)
+    except SystemExit as exc:
+        if exc.code and any(_looks_like_global_flag(a) for a in raw_argv):
+            print(
+                "hint: global flags (--config-file/--env/--author/--branch/--json) go BEFORE the "
+                "subcommand, e.g. `cfg --env prod status`.",
+                file=sys.stderr,
+            )
+        raise
     args.json = bool(args.json or json_mode)
     if args.cmd == "ui":
         from cfg.ui.server import run_ui
@@ -94,8 +103,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cfg")
-    parser.add_argument("--config-file", default=None)
-    parser.add_argument("--env", default="dev")
+    parser.add_argument("--config-file", default=os.environ.get("CFG_CONFIG"))
+    parser.add_argument("--env", default=os.environ.get("CFG_ENV", "dev"))
     parser.add_argument("--author", default=None)
     parser.add_argument("--branch", default=None)
     parser.add_argument("--json", action="store_true")
@@ -234,6 +243,13 @@ def _parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--port", type=int, default=8765)
     p_ui.add_argument("--no-open", action="store_true")
     return parser
+
+
+_GLOBAL_FLAGS = ("--config-file", "--env", "--author", "--branch")
+
+
+def _looks_like_global_flag(arg: str) -> bool:
+    return any(arg == g or arg.startswith(g + "=") for g in _GLOBAL_FLAGS)
 
 
 def _has_option(argv: list[str], name: str) -> bool:
