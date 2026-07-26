@@ -138,8 +138,21 @@ def status_report(engine: Engine) -> tuple[dict[str, Any], int]:
         "tracked": tracked,
         "drift": drift,
         "warnings": _env_warnings(engine),
+        "nudges": _drift_nudges(tracked, drift),
     }
     return report, EXIT_OK
+
+
+def _drift_nudges(tracked: int, drift: int) -> list[str]:
+    """Turn a high drift ratio into an actionable suggestion. When a large share of tracked
+    records drifted, every edit needs a manual adopt first and restore has no clean baseline —
+    so nudge the operator to baseline the collection once with `cfg adopt --all`."""
+    if drift >= 5 and tracked and drift / tracked >= 0.25:
+        return [
+            f"{drift}/{tracked} tracked records drifted — run `cfg adopt --all` to baseline the "
+            "collection, then edits and restore work without a per-record adopt."
+        ]
+    return []
 
 
 def _env_warnings(engine: Engine) -> list[str]:
@@ -181,6 +194,47 @@ def import_records(
         allow_secret=allow_secret,
     )
     return result, EXIT_OK
+
+
+def export_records(engine: Engine, record: str | None = None) -> tuple[dict[str, Any], int]:
+    return engine.export_records(parse_record(record) if record else None), EXIT_OK
+
+
+def import_from_file(
+    engine: Engine,
+    export_obj: Any,
+    *,
+    message: str,
+    allow_secret: bool = False,
+    dry_run: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """Restore documents from a `cfg export` artifact by writing them back through the
+    drift-guarded bulk-commit path (preflights the whole batch; applies none on any drift)."""
+    items = _export_items_to_commit(export_obj)
+    if dry_run:
+        return bulk_commit_preview(engine, items), EXIT_OK
+    result = engine.commit_many(items, message=message, allow_secret=allow_secret)
+    return result, bulk_commit_exit_code(result)
+
+
+def _export_items_to_commit(export_obj: Any) -> list[tuple[RecordRef, dict[str, Any]]]:
+    if isinstance(export_obj, dict) and export_obj.get("kind") == "cfgit-export":
+        rows = export_obj.get("items") or []
+    elif isinstance(export_obj, list):
+        rows = export_obj
+    else:
+        raise ValueError("import --from expects a cfg export artifact or a list of {record, doc}")
+    out: list[tuple[RecordRef, dict[str, Any]]] = []
+    for i, row in enumerate(rows, start=1):
+        if not isinstance(row, dict) or "doc" not in row:
+            raise ValueError(f"export item {i} needs a doc")
+        rec = row.get("record") or (
+            f"{row.get('collection')}:{row.get('record_id')}" if row.get("collection") else None
+        )
+        if not rec:
+            raise ValueError(f"export item {i} needs record or collection+record_id")
+        out.append((parse_record(rec), row["doc"]))
+    return out
 
 
 def diff(engine: Engine, record: str, a: str = "=HEAD", b: str = "=live") -> tuple[dict[str, Any], int]:
@@ -287,13 +341,47 @@ def bulk_commit(
     message: str,
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
 ) -> tuple[dict[str, Any], int]:
     parsed = _bulk_commit_items(items)
+    if dry_run:
+        if branch and branch != engine.config.branches.default_branch:
+            raise ValueError("--dry-run is only supported on the main-branch commit path")
+        return bulk_commit_preview(engine, parsed), EXIT_OK
     if branch and branch != engine.config.branches.default_branch:
         result = engine.branch_commit_many(branch, parsed, message=message, allow_secret=allow_secret)
     else:
         result = engine.commit_many(parsed, message=message, allow_secret=allow_secret)
     return result, bulk_commit_exit_code(result)
+
+
+def bulk_commit_preview(
+    engine: Engine, items: list[tuple[RecordRef, dict[str, Any]]]
+) -> dict[str, Any]:
+    """Dry-run a bulk commit: preview each record without writing. Aggregates per-record
+    would_commit / noop / changed_outside_cfgit so the operator sees the whole blast radius of a
+    collection-scale replace before applying it. Mirrors commit_many's per-record semantics."""
+    results: list[dict[str, Any]] = []
+    would_change = drift = noop = 0
+    for ref, doc in items:
+        try:
+            preview = engine.commit_preview(ref, doc)
+        except NoSuchConfig:
+            results.append({"record": f"{ref.collection}:{ref.record_id}", "state": "missing"})
+            continue
+        state = preview.get("state")
+        if state == "would_commit":
+            would_change += 1
+        elif state == "changed_outside_cfgit":
+            drift += 1
+        elif state == "noop":
+            noop += 1
+        results.append({"record": f"{ref.collection}:{ref.record_id}", **preview})
+    return {
+        "state": "dry_run",
+        "summary": {"total": len(items), "would_commit": would_change, "drift": drift, "noop": noop},
+        "results": results,
+    }
 
 
 def log(engine: Engine, record: str, *, limit: int | None = 20) -> tuple[list[dict[str, Any]], int]:
@@ -461,6 +549,14 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             large_field_bytes=int(payload.get("large_field_bytes") or 20000),
         )
     if name == "import":
+        if payload.get("export") is not None or payload.get("from") is not None:
+            return import_from_file(
+                engine,
+                payload.get("export") if payload.get("export") is not None else payload.get("from"),
+                message=str(payload.get("message") or "import from export file"),
+                allow_secret=bool(payload.get("allow_secret")),
+                dry_run=bool(payload.get("dry_run")),
+            )
         return import_records(
             engine,
             _blank_to_none(payload.get("record")),
@@ -468,6 +564,8 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             message=str(payload.get("message") or "initial import"),
             allow_secret=bool(payload.get("allow_secret")),
         )
+    if name == "export":
+        return export_records(engine, _blank_to_none(payload.get("record")))
     if name == "diff":
         return diff(
             engine,
@@ -483,6 +581,7 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
                 message=str(payload.get("message") or "commit"),
                 allow_secret=bool(payload.get("allow_secret")),
                 branch=_blank_to_none(payload.get("branch")),
+                dry_run=bool(payload.get("dry_run")),
             )
         return commit(
             engine,
@@ -509,6 +608,7 @@ def run_named_action(name: str, engine: Engine, payload: dict[str, Any] | None =
             message=str(payload.get("message") or "bulk commit"),
             allow_secret=bool(payload.get("allow_secret")),
             branch=_blank_to_none(payload.get("branch")),
+            dry_run=bool(payload.get("dry_run")),
         )
     if name == "log":
         return log(engine, _required(payload, "record"), limit=int(payload.get("limit") or 20))

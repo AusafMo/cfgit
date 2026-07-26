@@ -145,8 +145,15 @@ def _parser() -> argparse.ArgumentParser:
     p_import = sub.add_parser("import")
     p_import.add_argument("record", nargs="?")
     p_import.add_argument("--all", action="store_true")
+    p_import.add_argument("--from", dest="from_file",
+                          help="restore documents from a `cfg export` file (writes via the drift-guarded bulk-commit path)")
     p_import.add_argument("-m", "--message", default="initial import")
     p_import.add_argument("--allow-secret", action="store_true")
+    p_import.add_argument("--dry-run", action="store_true", help="with --from: preview the bulk write without applying")
+
+    p_export = sub.add_parser("export", help="dump live documents to a portable, re-importable JSON snapshot")
+    p_export.add_argument("record", nargs="?", help="one collection:id; omit to export every configured collection")
+    p_export.add_argument("--out", help="write the snapshot to this file instead of stdout")
 
     p_doctor = sub.add_parser("doctor")
     p_doctor.add_argument("record", nargs="?")
@@ -191,7 +198,7 @@ def _parser() -> argparse.ArgumentParser:
     p_commit.add_argument(
         "--dry-run",
         action="store_true",
-        help="preview the field-level delta vs live and exit without writing (main-branch, single record)",
+        help="preview the delta and exit without writing; works with --from (single) and --bulk-from (per-record)",
     )
 
     p_set = sub.add_parser("set", help="edit scalar fields in place; routes through commit (drift-guarded)")
@@ -321,14 +328,31 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         raise ValueError(f"unknown PR command: {args.pr_cmd}")
 
     if args.cmd == "import":
+        if getattr(args, "from_file", None):
+            from cfg.interfaces.actions import import_from_file
+
+            return import_from_file(
+                engine,
+                _load_json_any(args.from_file),
+                message=args.message if args.message != "initial import" else "import from export file",
+                allow_secret=args.allow_secret,
+                dry_run=args.dry_run,
+            )
         if not args.all and not args.record:
-            raise ValueError("import needs --all or a record")
+            raise ValueError("import needs --all, a record, or --from <export.json>")
         result = engine.import_records(
             _parse_record(args.record) if args.record else None,
             message=args.message,
             allow_secret=args.allow_secret,
         )
         return result, EXIT_OK
+
+    if args.cmd == "export":
+        report = engine.export_records(_parse_record(args.record) if args.record else None)
+        if getattr(args, "out", None):
+            Path(args.out).write_text(json.dumps(_to_json(report), indent=2), encoding="utf-8")
+            return {"state": "exported", "out": args.out, "count": report["count"]}, EXIT_OK
+        return report, EXIT_OK
 
     if args.cmd == "status":
         rows = engine.status(_parse_record(args.record) if args.record else None)
@@ -383,11 +407,15 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         if args.bulk_from_file:
             if args.record or args.from_file:
                 raise ValueError("bulk commit uses --bulk-from without record or --from")
-            if not args.message:
-                raise ValueError("bulk commit needs -m/--message")
-            from cfg.interfaces.actions import bulk_commit_exit_code, parse_bulk_commit_items
+            from cfg.interfaces.actions import bulk_commit_exit_code, bulk_commit_preview, parse_bulk_commit_items
 
             items = parse_bulk_commit_items(_load_json_any(args.bulk_from_file))
+            if args.dry_run:
+                if branch != engine.config.branches.default_branch:
+                    raise ValueError("--dry-run is only supported on the main-branch commit path")
+                return bulk_commit_preview(engine, items), EXIT_OK
+            if not args.message:
+                raise ValueError("bulk commit needs -m/--message")
             if branch != engine.config.branches.default_branch:
                 result = engine.branch_commit_many(
                     branch,
@@ -674,6 +702,8 @@ def _format_status_report(r: dict[str, Any]) -> str:
     ]
     for warning in r.get("warnings") or []:
         lines.append(f"⚠ {warning}")
+    for nudge in r.get("nudges") or []:
+        lines.append(f"→ {nudge}")
     return "\n".join(lines)
 
 
