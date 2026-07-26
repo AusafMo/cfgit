@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
         raise
-    args.json = bool(args.json or json_mode)
+    args.json = _resolve_json_mode(explicit_json=bool(args.json or json_mode))
     if args.cmd == "ui":
         from cfg.ui.server import run_ui
 
@@ -243,6 +243,24 @@ def _parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--port", type=int, default=8765)
     p_ui.add_argument("--no-open", action="store_true")
     return parser
+
+
+def _resolve_json_mode(*, explicit_json: bool, isatty: bool | None = None) -> bool:
+    """Decide whether output is machine JSON.
+
+    Precedence: explicit --json always wins; else CFG_OUTPUT (json|human|auto); else `auto`.
+    `auto` = human when stdout is a TTY, JSON when piped/redirected — so interactive users get
+    prose while pipelines keep parseable JSON with no flag.
+    """
+    if explicit_json:
+        return True
+    mode = (os.environ.get("CFG_OUTPUT") or "auto").strip().lower()
+    if mode == "json":
+        return True
+    if mode == "human":
+        return False
+    tty = sys.stdout.isatty() if isatty is None else isatty
+    return not tty  # auto: JSON when NOT a tty
 
 
 _GLOBAL_FLAGS = ("--config-file", "--env", "--author", "--branch")
