@@ -67,17 +67,24 @@ def cfg_doctor(
 def cfg_import(
     record: str | None = None,
     all_records: bool = False,
+    from_export: dict[str, Any] | list[dict[str, Any]] | None = None,
+    dry_run: bool = False,
     message: str = "initial import",
     allow_secret: bool = False,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
 ) -> dict[str, Any]:
+    """Start tracking live records (record or all_records), or restore documents from a
+    `cfg_export` artifact via from_export (writes them back through the drift-guarded bulk-commit
+    path; set dry_run=true to preview)."""
     return _call(
         "import",
         {
             "record": record,
             "all_records": all_records,
+            "export": from_export,
+            "dry_run": dry_run,
             "message": message,
             "allow_secret": allow_secret,
         },
@@ -85,6 +92,19 @@ def cfg_import(
         env=env,
         author=author,
     )
+
+
+@mcp.tool()
+def cfg_export(
+    record: str | None = None,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Read-only snapshot of live documents into a portable, re-importable artifact. Pass a
+    record for one, or omit it to export every configured collection. Each item is stamped with
+    its cfgit head seq/oid. Feed the result back to cfg_import(from_export=...) to restore."""
+    return _call("export", {"record": record}, config_file=config_file, env=env, author=author)
 
 
 @mcp.tool()
@@ -139,16 +159,26 @@ def cfg_impact(
 def cfg_commit(
     record: str,
     doc_json: str,
-    message: str,
+    message: str = "",
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
 ) -> dict[str, Any]:
+    """Commit a full document. Set dry_run=true to preview the field-level delta vs live and
+    get back state="would_commit" without writing (main-branch, single record)."""
     return _call(
         "commit",
-        {"record": record, "doc": doc_json, "message": message, "allow_secret": allow_secret, "branch": branch},
+        {
+            "record": record,
+            "doc": doc_json,
+            "message": message,
+            "allow_secret": allow_secret,
+            "branch": branch,
+            "dry_run": dry_run,
+        },
         config_file=config_file,
         env=env,
         author=author,
@@ -158,9 +188,10 @@ def cfg_commit(
 @mcp.tool()
 def cfg_bulk_commit(
     items: list[dict[str, Any]] | dict[str, Any] | str,
-    message: str,
+    message: str = "",
     allow_secret: bool = False,
     branch: str | None = None,
+    dry_run: bool = False,
     config_file: str | None = None,
     env: str = "dev",
     author: str | None = None,
@@ -170,10 +201,42 @@ def cfg_bulk_commit(
     `items` may be either:
     [{"record":"collection:id","doc":{...}}, ...]
     {"collection:id": {...}, ...}, or a JSON string in either shape.
+
+    Set dry_run=true to preview every record's delta (would_commit / noop / changed_outside_cfgit)
+    without writing — recommended before a collection-scale replace.
     """
     return _call(
         "bulk_commit",
-        {"items": items, "message": message, "allow_secret": allow_secret, "branch": branch},
+        {"items": items, "message": message, "allow_secret": allow_secret, "branch": branch, "dry_run": dry_run},
+        config_file=config_file,
+        env=env,
+        author=author,
+    )
+
+
+@mcp.tool()
+def cfg_set(
+    record: str,
+    assignments: dict[str, Any] | list[dict[str, Any]] | str,
+    message: str = "",
+    allow_secret: bool = False,
+    dry_run: bool = False,
+    config_file: str | None = None,
+    env: str = "dev",
+    author: str | None = None,
+) -> dict[str, Any]:
+    """Edit scalar fields of a record in place. `assignments` is a mapping of dotted-path →
+    value (e.g. {"enabled": true, "retry.max": 3}). Routes through the drift-guarded commit
+    path — never a raw write. Set dry_run=true to preview without writing."""
+    return _call(
+        "set",
+        {
+            "record": record,
+            "assignments": assignments,
+            "message": message,
+            "allow_secret": allow_secret,
+            "dry_run": dry_run,
+        },
         config_file=config_file,
         env=env,
         author=author,
@@ -439,6 +502,22 @@ def cfg_identity_hash(token: str) -> dict[str, Any]:
     }
 
 
+@mcp.tool()
+def cfg_check_update(snooze_days: int | None = None) -> dict[str, Any]:
+    """Check PyPI for a newer cfgit release. Call this at the start of a cfgit session; if
+    `data.update_available` is true and not `data.snoozed`, tell the user the new version and
+    offer to upgrade (`pip install -U cfgit`) or to snooze. NEVER upgrade for them.
+
+    Pass `snooze_days` (e.g. 30) to record a "don't ask again for N days" snooze when the user
+    asks to be reminded later. Best-effort and fail-silent; honors CFGIT_NO_UPDATE_CHECK.
+    """
+    from cfg import update
+
+    if snooze_days is not None:
+        return {"status": "ok", "code": actions.EXIT_OK, "message": "", "data": update.snooze(snooze_days)}
+    return {"status": "ok", "code": actions.EXIT_OK, "message": "", "data": update.check(force=True).to_json()}
+
+
 def _call(
     name: str,
     payload: dict[str, Any],
@@ -447,7 +526,8 @@ def _call(
     env: str,
     author: str | None,
 ) -> dict[str, Any]:
-    return actions.envelope(_call_inner, name, payload, config_file, env, author)
+    record = payload.get("record") if isinstance(payload, dict) else None
+    return actions.envelope(_call_inner, name, payload, config_file, env, author, record=record)
 
 
 def _call_inner(

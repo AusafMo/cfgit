@@ -1,21 +1,21 @@
 [project]
 name = "cfgit-agent"
-version = "0.1.0"
+version = "0.4.1"
 description = "Optional cfgit plugin for multi-agent coordination over live database records"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [{ name = "Mohammad Ausaf" }]
 dependencies = [
-  "cfgit>=0.1.2,<0.2.0",
+  "cfgit>=0.4.1,<0.5.0",
 ]
 
 [project.optional-dependencies]
-mongo = ["cfgit[mongo]>=0.1.2,<0.2.0"]
-postgres = ["cfgit[postgres]>=0.1.2,<0.2.0"]
-mcp = ["cfgit[mcp]>=0.1.2,<0.2.0"]
+mongo = ["cfgit[mongo]>=0.4.1,<0.5.0"]
+postgres = ["cfgit[postgres]>=0.4.1,<0.5.0"]
+mcp = ["cfgit[mcp]>=0.4.1,<0.5.0"]
 all = [
-  "cfgit[mongo,postgres,mcp]>=0.1.2,<0.2.0",
+  "cfgit[mongo,postgres,mcp]>=0.4.1,<0.5.0",
 ]
 
 [project.urls]

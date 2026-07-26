@@ -2,6 +2,7 @@
 """DB-neutral cfgit engine."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 import fnmatch
@@ -12,7 +13,7 @@ from typing import Any
 from cfg.adapters.base import AtomicityUnavailable, NoSuchConfig, StorageAdapter
 from cfg.core.authz import authorize_mutation
 from cfg.core.config import CollectionConfig, ProjectConfig
-from cfg.core.diff import diff_values
+from cfg.core.diff import diff_values, format_diff
 from cfg.core.hashing import hash_doc, stored_doc, strip_for_hash
 from cfg.core.identity import Identity, self_asserted_identity
 
@@ -492,6 +493,32 @@ class Engine:
             results.append({"collection": item.collection, "record_id": item.record_id, "state": "imported", "seq": result.seq, "oid": result.oid})
         return results
 
+    def export_records(self, ref: RecordRef | None = None) -> dict[str, Any]:
+        """Read-only snapshot of live documents into a portable, re-importable artifact.
+
+        With a ref, exports that one record; without, exports every configured collection's live
+        records. Each item carries its live doc plus the current cfgit head seq/oid (or null if
+        untracked), so the snapshot records exactly which version it represents. Writes nothing.
+        """
+        refs = [ref] if ref else self._all_refs(include_history=False)
+        items: list[dict[str, Any]] = []
+        for item in sorted(refs, key=lambda r: (r.collection, r.record_id)):
+            live = self.adapter.get_record(item.collection, item.record_id)
+            if live is None:
+                continue
+            head = self.adapter.get_head(item.collection, item.record_id)
+            items.append(
+                {
+                    "record": f"{item.collection}:{item.record_id}",
+                    "collection": item.collection,
+                    "record_id": item.record_id,
+                    "head_seq": head.get("seq") if head else None,
+                    "head_oid": head.get("oid") if head else None,
+                    "doc": live,
+                }
+            )
+        return {"version": 1, "kind": "cfgit-export", "count": len(items), "items": items}
+
     def doctor(self, ref: RecordRef | None = None, *, large_field_bytes: int = 20000) -> dict[str, Any]:
         """Read-only preflight. Walks live records and reports what would trip an
         import/commit BEFORE anything is written: secret-deny matches (grouped by
@@ -633,6 +660,60 @@ class Engine:
         )
         return {"state": "committed", "oid": result.oid, "seq": result.seq}
 
+    def commit_preview(
+        self,
+        ref: RecordRef,
+        doc: dict[str, Any],
+        *,
+        allow_secret: bool = False,
+    ) -> dict[str, Any]:
+        """Dry-run of `commit` on the main-branch path: same guard order, no write.
+
+        Returns `changed_outside_cfgit` / `noop` exactly as `commit` would, so the operator
+        sees a refusal *before* attempting the write; otherwise returns `would_commit` with the
+        field-level delta. Runs the secret scan so a `SecretBlocked` surfaces here too.
+        """
+        self._authorize("commit")
+        coll = self.config.collection(ref.collection)
+        live = self.adapter.get_record(ref.collection, ref.record_id)
+        if live is None:
+            raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
+        head = self.adapter.get_head(ref.collection, ref.record_id)
+        expected_head = head.get("oid") if head else None
+        expected_live = hash_doc(live, coll)
+        if head and expected_live != expected_head:
+            return {"state": "changed_outside_cfgit", "live_oid": expected_live, "head_oid": expected_head}
+        new_oid = hash_doc(doc, coll)
+        if head and new_oid == expected_head:
+            return {"state": "noop", "oid": new_oid, "seq": head.get("seq")}
+        # secret policy must fire in preview too, so it is not a surprise at commit time
+        self._secret_meta(doc, coll, allow_secret=allow_secret, message="(dry-run)")
+        changes = diff_values(strip_for_hash(live, coll), strip_for_hash(doc, coll))
+        return {
+            "state": "would_commit",
+            "changes": changes,
+            "text": format_diff(changes),
+            "new_oid": new_oid,
+            "head_oid": expected_head,
+        }
+
+    def build_commit_doc(
+        self,
+        ref: RecordRef,
+        assignments: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        """Fetch the LIVE document and apply dotted-path assignments, returning the full
+        candidate doc to hand to commit()/commit_preview(). Basing on live (not HEAD) means a
+        drifted record makes the subsequent commit refuse — the fast path inherits the clobber
+        guard instead of silently overwriting an out-of-band change."""
+        live = self.adapter.get_record(ref.collection, ref.record_id)
+        if live is None:
+            raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
+        doc = deepcopy(live)
+        for path, value in assignments:
+            _set_dotted(doc, path, value)
+        return doc
+
     def commit_many(
         self,
         items: list[tuple[RecordRef, dict[str, Any]]],
@@ -693,6 +774,18 @@ class Engine:
                     expected_live_oid=plan["expected_live"],
                     make_head=True,
                 )
+            except KeyboardInterrupt:
+                # A cancel between per-record writes: each apply() is atomic, so already-committed
+                # records are durable. Return a clean partial report (what landed, what did not)
+                # instead of dying silently and leaving the operator guessing about DB state.
+                pending = [_plan_result(p) for p in plans[offset:]]
+                return {
+                    "state": "partial",
+                    "cancelled": True,
+                    "results": results,
+                    "failed": [],
+                    "pending": pending,
+                }
             except Exception as exc:
                 failed = [
                     {
@@ -1082,7 +1175,7 @@ class Engine:
         else:
             rows = self.adapter.query_history(collection=ref.collection, record_id=ref.record_id, ref=value, with_doc=True)
         if not rows:
-            raise NoSuchConfig(f"ref not found: {value}")
+            raise NoSuchConfig(_ref_not_found_message(value))
         if len(rows) > 1:
             raise ValueError(f"ambiguous ref: {value}")
         return rows[0]
@@ -1279,6 +1372,60 @@ def _require_message(message: str) -> str:
     return text
 
 
+def _set_dotted(doc: dict[str, Any], path: str, value: Any) -> None:
+    """Set a value at a dotted path, creating intermediate dicts. Supports list indices as
+    `a.b[0]` or `a.b.0` (the index must already exist in a list). Mutates `doc` in place."""
+    parts = _split_path(path)
+    if not parts:
+        raise ValueError("empty field path")
+    cur: Any = doc
+    for i, (key, is_index) in enumerate(parts):
+        last = i == len(parts) - 1
+        if is_index:
+            if not isinstance(cur, list):
+                raise ValueError(f"{path}: expected a list at index [{key}]")
+            idx = int(key)
+            if idx < 0 or idx >= len(cur):
+                raise ValueError(f"{path}: list index [{idx}] out of range")
+            if last:
+                cur[idx] = value
+            else:
+                cur = cur[idx]
+        else:
+            if not isinstance(cur, dict):
+                raise ValueError(f"{path}: cannot set field {key!r} on a non-object")
+            if last:
+                cur[key] = value
+            else:
+                if key not in cur:
+                    cur[key] = {}
+                elif not isinstance(cur[key], (dict, list)):
+                    raise ValueError(
+                        f"{path}: {key!r} is a scalar; refusing to overwrite it with an object"
+                    )
+                cur = cur[key]
+
+
+def _split_path(path: str) -> list[tuple[str, bool]]:
+    """Parse `a.b[0].c` into [(a,False),(b,False),(0,True),(c,False)]. (key, is_index)."""
+    out: list[tuple[str, bool]] = []
+    for segment in str(path).split("."):
+        if not segment:
+            raise ValueError(f"invalid field path: {path!r}")
+        # split trailing [n] indices off a key, e.g. "b[0][1]"
+        m = re.match(r"^([^\[\]]*)((?:\[\d+\])*)$", segment)
+        if not m:
+            raise ValueError(f"invalid field path segment: {segment!r}")
+        name, indices = m.group(1), m.group(2)
+        if name:
+            out.append((name, False))
+        elif not indices:
+            raise ValueError(f"invalid field path segment: {segment!r}")
+        for idx in re.findall(r"\[(\d+)\]", indices):
+            out.append((idx, True))
+    return out
+
+
 _BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
@@ -1356,6 +1503,12 @@ def _branch_plan_result(plan: dict[str, Any], *, state: str | None = None) -> di
         if key in plan and key not in result:
             result[key] = plan[key]
     return result
+
+
+def _ref_not_found_message(value: str) -> str:
+    if value.isdecimal():
+        return f"ref not found: {value} (sequence refs use @{value}; bare values are oid prefixes)"
+    return f"ref not found: {value}"
 
 
 def _parse_branch_range(value: str, default_branch: str) -> tuple[str, str]:
