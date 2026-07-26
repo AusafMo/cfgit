@@ -68,12 +68,21 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             _emit_error("error", str(exc), args)
             return EXIT_ARG
+    if args.cmd == "check-update":
+        from cfg import update
+
+        if args.snooze is not None:
+            _emit(update.snooze(args.snooze), json_mode=args.json)
+            return EXIT_OK
+        _emit(update.check(force=True).to_json(), json_mode=args.json)
+        return EXIT_OK
     try:
         project = load_config(args.config_file)
         engine = _engine(project, args.env, author=args.author)
         _warn_open_mode(engine, args)
         result, code = _dispatch(engine, args)
         _emit(result, json_mode=args.json, record=getattr(args, "record", None))
+        _maybe_update_nudge(args)
         return code
     except AmbiguousConfig as exc:
         _emit_error("bad_config", str(exc), args, exc=exc)
@@ -244,6 +253,10 @@ def _parser() -> argparse.ArgumentParser:
     p_identity_hash = sub.add_parser("identity-hash")
     p_identity_hash.add_argument("token", nargs="?")
     p_identity_hash.add_argument("--stdin", action="store_true")
+
+    p_update = sub.add_parser("check-update", help="check PyPI for a newer cfgit (never upgrades for you)")
+    p_update.add_argument("--snooze", nargs="?", type=int, const=30, default=None,
+                          metavar="DAYS", help="silence the update nudge for DAYS (default 30)")
 
     p_ui = sub.add_parser("ui")
     p_ui.add_argument("--host", default="127.0.0.1")
@@ -639,6 +652,26 @@ def _load_json_any(path: str) -> Any:
 
 
 _MUTATING_CMDS = {"commit", "set", "edit", "adopt", "import", "restore"}
+
+# Cheap, read-only commands safe to piggyback a throttled update check onto — never a write path,
+# so a version check never sits in front of a prod mutation.
+_READ_COMMANDS = {"status", "doctor", "whoami", "log"}
+
+
+def _maybe_update_nudge(args: argparse.Namespace) -> None:
+    """Deterministic npm/brew-style nudge: after a cheap read command, if a newer cfgit is on
+    PyPI (throttled daily, snooze-aware, kill-switchable), print one line to stderr — but only
+    for an interactive human (TTY, not --json). Never touches stdout; never raises."""
+    if args.cmd not in _READ_COMMANDS or getattr(args, "json", False) or not sys.stdout.isatty():
+        return
+    try:
+        from cfg import update
+
+        status = update.check()
+        if status.message:
+            print(status.message, file=sys.stderr)
+    except Exception:  # noqa: BLE001 - a nudge must never break the command
+        pass
 
 
 def _warn_open_mode(engine: Engine, args: argparse.Namespace) -> None:
