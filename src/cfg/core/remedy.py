@@ -102,7 +102,7 @@ _STATE_REMEDIES: dict[str, Next] = {
         commands=("cfg commit {record} --from <file> -m '<why>'",),
     ),
     "dry_run": Next(
-        why="Dry run: this is what a restore would change. Nothing was written.",
+        why="Dry run: this is what would change. Nothing was written.",
         remedy="Rerun without --dry-run to apply.",
         commands=(),
     ),
