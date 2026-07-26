@@ -13,7 +13,9 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Never use cross-project Mongo URIs for writes. Remote managed Mongo writes are forbidden unless the user explicitly grants a per-turn exception and asks for that exact target.
 - Treat `changed_outside_cfgit` as the central state. Do not commit over it. Run `cfg diff`, explain what changed, then `cfg adopt` if the user wants to fold that live state into history.
 - If `[branches] enabled = true`, draft risky changes on a non-main branch and open a cfgit PR. Branch commits and PR creation do not mutate runtime; `cfg pr merge` is the only branch command that does.
-- Prefer `--json` for agent parsing.
+- At the start of a cfgit session, call `cfg_check_update` (or `cfg check-update --json`). If `data.update_available` is true and `data.snoozed` is false, tell the user the new version, show `data.notes` (what's new), and offer to upgrade (`pip install -U cfgit`) or snooze — call `cfg_check_update` with `snooze_days=30` if they want to be reminded later. NEVER upgrade for them. It is best-effort and silent when there is nothing to say; skip if `data.disabled` (they set `CFGIT_NO_UPDATE_CHECK`).
+- Prefer `--json` for agent parsing. Output is otherwise human-on-a-TTY / JSON-when-piped; `CFG_OUTPUT=json|human|auto` overrides. To avoid repeating flags, `CFG_ENV`, `CFG_CONFIG`, and `CFG_AUTHOR` set session defaults, and cfgit discovers `.cfg.toml` by walking up from the cwd.
+- Run `cfg doctor --status` to confirm where you are pointed (config, env, target db, identity mode + whether verified, reachability, tracked/drift counts) before mutating an unfamiliar env. It warns if a `needs_approval` env is still in `open` identity mode — writes there succeed UNAUDITED; surface that to the user.
 - Use deterministic `cfg impact` first. Add `--llm` only when the user asks for LLM narration and the impact plugin is installed. Use `--against <collection:id>` when the user wants narration scoped to specific related records instead of the whole system.
 - Before the FIRST `cfg import` against a new database or `.cfg.toml`, run `cfg doctor` (read-only). It reports every secret-deny match, oversized field, and key issue at once, with paste-ready `secret_fields`/`ignore_fields` snippets. Fix `.cfg.toml` from its output, then import. This avoids import failing one secret at a time.
 - In `authenticated` or `enforced` identity mode, the process must already have a verified identity source, usually `CFGIT_IDENTITY_TOKEN` or a per-user DB principal. `--author` and MCP `author` are hints only; cfgit rejects them if they do not match the verified identity.
@@ -53,7 +55,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - Every outcome now carries a top-level `next` block (why + remedy + copy-paste `commands`);
      on a refusal, follow `next.commands` rather than guessing.
    - For a coupled multi-record change, write a batch JSON file and run `cfg commit --bulk-from <file> -m "<message>" --json`. The batch file can be `[{"record":"collection:id","doc":{...}}]` or `{"collection:id": {...}}`. Preview a collection-scale batch first with `cfg commit --bulk-from <file> --dry-run --json` — it reports each record's `would_commit`/`noop`/`changed_outside_cfgit` and writes nothing.
-   - Before a risky bulk change, snapshot the current live docs with `cfg export --out backup.json --json` (a portable, re-importable artifact stamped with head seq/oid). To roll back, `cfg import --from backup.json -m "<message>" --json` writes them back through the drift-guarded path (preview with `--dry-run`). For an in-tool rollback with no file, use `cfg tag` + `cfg restore --tag` instead.
+   - Before a risky bulk change, snapshot the current live docs with `cfg export --out backup.json --json` (a portable, re-importable artifact stamped with head seq/oid). If export prints a size warning, the config may be pointed at a data-plane collection (events/content/jobs) cfgit is not built to version — flag it. To roll back, `cfg import --from backup.json -m "<message>" --json` writes them back through the drift-guarded path (preview with `--dry-run`). If it returns `partial` with `cancelled: true` (the user interrupted), already-applied records are durable and rerunning the same command resumes. For an in-tool rollback with no file, use `cfg tag` + `cfg restore --tag` instead.
    - For a draft branch, use `cfg --branch <branch> commit <record> --from <file> -m "<message>" --json` or `cfg --branch <branch> commit --bulk-from <file> -m "<message>" --json`. This writes cfgit refs only; runtime is unchanged.
    - If commit returns `changed_outside_cfgit`, stop and inspect drift.
    - If bulk commit returns `blocked`, no record was applied; inspect `failed`. If it returns `partial`, some records were applied before a race/failure; inspect `results`, `failed`, and `pending` before continuing.
@@ -87,7 +89,9 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_impact`
 - `cfg_commit`
 - `cfg_bulk_commit`
+- `cfg_set` for a few scalar field edits (routes through the drift-guarded commit path)
 - `cfg_export`
+- `cfg_import` (pass `from_export` to restore a snapshot; `dry_run` to preview)
 - `cfg_branch_list`
 - `cfg_branch_create`
 - `cfg_branch_delete`
@@ -108,7 +112,8 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 - `cfg_whoami`
 - `cfg_init`
 - `cfg_identity_hash` for setup only. Prefer the local CLI for real tokens because MCP clients may log tool inputs.
+- `cfg_check_update` — check PyPI for a newer cfgit; pass `snooze_days` to snooze. Never upgrades.
 
-Every MCP tool returns the same envelope shape as the CLI exit status: `status`, `code`, `message`, `data`.
+Every MCP tool returns the same envelope: `status`, `code`, `message`, `data`, plus top-level `state` and `next`. `state` echoes the outcome's terminal state (e.g. `changed_outside_cfgit`, `noop`, `blocked`, `would_commit`); `next` is a self-teaching remedy `{why, remedy, commands}` when the outcome needs one, else null. Branch on `state` and follow `next.commands` on a refusal instead of guessing.
 For MCP bulk commits, pass `items` as structured JSON (`[{record, doc}]`) when the client supports it; use a JSON string only when the client cannot send nested objects cleanly.
 For MCP history/env mismatches, branch on `status="error"` and `code=6`; surface the `message` to the user and do not continue mutation.

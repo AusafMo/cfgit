@@ -502,6 +502,22 @@ def cfg_identity_hash(token: str) -> dict[str, Any]:
     }
 
 
+@mcp.tool()
+def cfg_check_update(snooze_days: int | None = None) -> dict[str, Any]:
+    """Check PyPI for a newer cfgit release. Call this at the start of a cfgit session; if
+    `data.update_available` is true and not `data.snoozed`, tell the user the new version and
+    offer to upgrade (`pip install -U cfgit`) or to snooze. NEVER upgrade for them.
+
+    Pass `snooze_days` (e.g. 30) to record a "don't ask again for N days" snooze when the user
+    asks to be reminded later. Best-effort and fail-silent; honors CFGIT_NO_UPDATE_CHECK.
+    """
+    from cfg import update
+
+    if snooze_days is not None:
+        return {"status": "ok", "code": actions.EXIT_OK, "message": "", "data": update.snooze(snooze_days)}
+    return {"status": "ok", "code": actions.EXIT_OK, "message": "", "data": update.check(force=True).to_json()}
+
+
 def _call(
     name: str,
     payload: dict[str, Any],
