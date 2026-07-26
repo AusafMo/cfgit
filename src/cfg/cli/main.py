@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         project = load_config(args.config_file)
         engine = _engine(project, args.env, author=args.author)
+        _warn_open_mode(engine, args)
         result, code = _dispatch(engine, args)
         _emit(result, json_mode=args.json)
         return code
@@ -142,6 +143,8 @@ def _parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("record", nargs="?")
     p_doctor.add_argument("--large-field-bytes", type=int, default=20000,
                           help="flag string fields at or above this size (default 20000)")
+    p_doctor.add_argument("--status", action="store_true",
+                          help="print a situational-awareness header (config, env, db, identity, reachability, drift)")
 
     p_status = sub.add_parser("status")
     p_status.add_argument("record", nargs="?")
@@ -299,6 +302,12 @@ def _dispatch(engine: Engine, args: argparse.Namespace) -> tuple[Any, int]:
         return rows, code
 
     if args.cmd == "doctor":
+        if getattr(args, "status", False):
+            from cfg.interfaces.actions import status_report
+
+            report, code = status_report(engine)
+            report["text"] = _format_status_report(report)
+            return report, code
         report = engine.doctor(
             _parse_record(args.record) if args.record else None,
             large_field_bytes=args.large_field_bytes,
@@ -562,6 +571,23 @@ def _load_json_any(path: str) -> Any:
         return json.load(f)
 
 
+_MUTATING_CMDS = {"commit", "set", "edit", "adopt", "import", "restore"}
+
+
+def _warn_open_mode(engine: Engine, args: argparse.Namespace) -> None:
+    """Loud stderr warning when a mutating command runs against a needs_approval env still in
+    identity.mode="open" (writes succeed unaudited). Suppress with CFG_WARN_OPEN_MODE=0."""
+    if args.cmd not in _MUTATING_CMDS:
+        return
+    if os.environ.get("CFG_WARN_OPEN_MODE", "1") in ("0", "false", "no"):
+        return
+    env = engine.config.envs.get(engine.env)
+    if env is None:
+        return
+    if remedy.open_mode_on_guarded_env(needs_approval=env.needs_approval, identity_mode=env.identity.mode):
+        print(f"⚠ {remedy.OPEN_MODE_WARNING}", file=sys.stderr)
+
+
 def _edit_in_editor(doc: dict[str, Any]) -> dict[str, Any]:
     """Write `doc` as pretty JSON to a temp file, open it in $EDITOR, and reparse on save."""
     import subprocess
@@ -601,6 +627,20 @@ def _parse_when(raw: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _format_status_report(r: dict[str, Any]) -> str:
+    reach = "reachable" if r.get("reachable") else "UNREACHABLE"
+    lines = [
+        f"config:   {r.get('config_file')}",
+        f"env:      {r.get('env')} ({r.get('database')})   db: {r.get('db')}",
+        f"identity: mode={r.get('identity_mode')}  authenticated={str(r.get('authenticated')).lower()}  "
+        f"permission={r.get('permission_mode')}",
+        f"store:    {reach}   tracked: {r.get('tracked')}   drift: {r.get('drift')}",
+    ]
+    for warning in r.get("warnings") or []:
+        lines.append(f"⚠ {warning}")
+    return "\n".join(lines)
 
 
 def _format_doctor(report: dict[str, Any]) -> str:
@@ -668,7 +708,7 @@ def _emit(value: Any, *, json_mode: bool) -> None:
             print(_format_item(item))
         _emit_result_remedy(value)
         return
-    if isinstance(value, dict) and "text" in value and ("changes" in value or "secret_blocks" in value):
+    if isinstance(value, dict) and "text" in value and ("changes" in value or "secret_blocks" in value or "reachable" in value):
         print(value["text"])
         return
     print(_format_item(value))

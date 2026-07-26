@@ -93,6 +93,10 @@ def whoami(engine: Engine) -> tuple[dict[str, Any], int]:
         "permission_role": permission_role(env.permissions, engine.author),
         "permission_mode": env.permissions.mode,
         "identity_mode": env.identity.mode,
+        "needs_approval": env.needs_approval,
+        "open_mode_warning": remedy.OPEN_MODE_WARNING
+        if remedy.open_mode_on_guarded_env(needs_approval=env.needs_approval, identity_mode=env.identity.mode)
+        else None,
         "config_file": str(engine.config.path),
     }, EXIT_OK
 
@@ -100,7 +104,50 @@ def whoami(engine: Engine) -> tuple[dict[str, Any], int]:
 def init(engine: Engine) -> tuple[dict[str, Any], int]:
     result = engine.init()
     violations = result["invariant_violations"]
-    return plain_init(result), EXIT_INVARIANT if violations else EXIT_OK
+    out = plain_init(result)
+    warnings = _env_warnings(engine)
+    if warnings:
+        out["warnings"] = warnings
+    return out, EXIT_INVARIANT if violations else EXIT_OK
+
+
+def status_report(engine: Engine) -> tuple[dict[str, Any], int]:
+    """Situational-awareness header: which config/env/db am I on, is my identity verified, is the
+    store reachable, how many records are tracked, how many drifted, and any env-shape warnings."""
+    env = engine.config.envs[engine.env]
+    reachable = True
+    tracked = 0
+    drift = 0
+    try:
+        rows = engine.status()
+        tracked = sum(1 for r in rows if r.state != "new")
+        drift = sum(1 for r in rows if r.state == "changed_outside_cfgit")
+    except Exception:  # noqa: BLE001 - reachability probe, any failure means "can't reach store"
+        reachable = False
+    identity_meta = engine.identity.history_meta() if engine.identity else {}
+    report = {
+        "config_file": str(engine.config.path),
+        "env": engine.env,
+        "database": env.database,
+        "db": env.db,
+        "identity_mode": env.identity.mode,
+        "authenticated": bool(identity_meta.get("authenticated")),
+        "permission_mode": env.permissions.mode,
+        "needs_approval": env.needs_approval,
+        "reachable": reachable,
+        "tracked": tracked,
+        "drift": drift,
+        "warnings": _env_warnings(engine),
+    }
+    return report, EXIT_OK
+
+
+def _env_warnings(engine: Engine) -> list[str]:
+    env = engine.config.envs[engine.env]
+    warnings: list[str] = []
+    if remedy.open_mode_on_guarded_env(needs_approval=env.needs_approval, identity_mode=env.identity.mode):
+        warnings.append(remedy.OPEN_MODE_WARNING)
+    return warnings
 
 
 def status(engine: Engine, record: str | None = None) -> tuple[list[Any], int]:

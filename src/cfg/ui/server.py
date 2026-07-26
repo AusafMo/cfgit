@@ -701,7 +701,10 @@ async function loadState(){
     const disp=w.identity_display||w.author||"";
     $("whoTxt").innerHTML=`<b>${esc(disp)}</b> · ${esc(w.env||"dev")}`;
     $("ava").textContent=initials(w.author||disp);
-    $("mode").textContent=w.identity_mode||id.mode||"open";}
+    $("mode").textContent=w.identity_mode||id.mode||"open";
+    const mel=$("mode");if(mel){mel.classList.toggle("warn",!!w.open_mode_warning);mel.title=w.open_mode_warning||"";}
+    if(w.open_mode_warning&&!S._warnedOpen){S._warnedOpen=true;
+      showRemedy({why:"This env writes UNAUDITED.",remedy:w.open_mode_warning,commands:[],docs:"IDENTITY_AND_ATTRIBUTION.md"});}}
   // populate env options from schema
   const sc=await fetch("/api/schema?"+qs()).then(r=>r.json()).catch(()=>null);
   if(sc&&sc.data&&Array.isArray(sc.data.envs)&&sc.data.envs.length){
