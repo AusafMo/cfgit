@@ -61,6 +61,14 @@ class AgentActions:
             lease_id=str(payload["lease_id"]),
         )
 
+    def renew(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._call(
+            self.coordinator.renew,
+            session_id=str(payload["session_id"]),
+            lease_id=str(payload["lease_id"]),
+            ttl_seconds=int(payload["ttl_seconds"]) if payload.get("ttl_seconds") else None,
+        )
+
     def open_intent(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._call(
             self.coordinator.open_intent,

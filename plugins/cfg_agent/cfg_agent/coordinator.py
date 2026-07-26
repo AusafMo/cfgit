@@ -146,6 +146,30 @@ class AgentCoordinator:
         )
         return lease
 
+    def renew(self, *, session_id: str, lease_id: str, ttl_seconds: int | None = None) -> dict[str, Any]:
+        """Extend an active lease the session owns, so a long-running agent can keep its claim
+        without releasing and re-acquiring (which would open a window for another agent)."""
+        session = self._require_running_session(session_id)
+        lease = self.adapter.get_lease(lease_id)
+        if lease is None:
+            raise AgentStateError("lease_not_found", f"{lease_id} was not found", {"id": lease_id})
+        if lease.get("session_id") != session_id:
+            raise AgentStateError(
+                "lease_not_owned",
+                "lease belongs to a different session",
+                {"lease_id": lease_id, "owner_session_id": lease.get("session_id")},
+            )
+        ttl = int(ttl_seconds) if ttl_seconds else self.default_lease_ttl_seconds
+        renewed = self.adapter.renew_lease(lease_id, ttl_seconds=ttl, now=utcnow())
+        self._event(
+            "lease.renewed",
+            session_id=session_id,
+            actor=session.get("actor"),
+            resource=renewed.get("resource"),
+            details=renewed,
+        )
+        return renewed
+
     def open_intent(
         self,
         *,
@@ -247,7 +271,11 @@ class AgentCoordinator:
 
         head = engine.resolve_ref(record_ref, "=HEAD")
         status = engine.status(record_ref)[0]
-        expected = base or (intent.get("expected_base") or {}).get(record_resource) or {}
+        # Resolve the expected base tolerantly. Both the `base=` param and the intent's stored
+        # expected_base may be given either FLAT ({head_seq, head_oid}) or NESTED keyed by record
+        # ({record: {head_seq, head_oid}}). Accept both so the stale-write guarantee does not
+        # silently fail open on an easy-to-get-wrong shape.
+        expected = _resolve_expected_base(base, intent.get("expected_base"), record_resource)
         expected_seq = expected.get("head_seq")
         expected_oid = expected.get("head_oid")
         if expected_seq is not None and int(expected_seq) != int(head.get("seq")):
@@ -614,6 +642,34 @@ class AgentCoordinator:
                 "details": details or {},
             }
         )
+
+
+def _resolve_expected_base(base, intent_expected, record_resource: str) -> dict[str, Any]:
+    """Pull an {head_seq, head_oid} base out of either a FLAT dict or a NESTED
+    {record: {...}} dict, from the `base=` param first then the intent's stored expected_base.
+
+    Both entry points historically accepted different shapes, so a flat dict passed where a nested
+    one was expected (or vice-versa) silently disabled the base_moved check. Accept both here so
+    the stale-write guarantee never fails open on shape alone.
+    """
+    for candidate in (base, intent_expected):
+        norm = _normalize_base(candidate, record_resource)
+        if norm:
+            return norm
+    return {}
+
+
+def _normalize_base(candidate, record_resource: str) -> dict[str, Any]:
+    if not isinstance(candidate, dict) or not candidate:
+        return {}
+    # flat shape: has head_seq / head_oid directly
+    if "head_seq" in candidate or "head_oid" in candidate:
+        return {"head_seq": candidate.get("head_seq"), "head_oid": candidate.get("head_oid")}
+    # nested shape: keyed by the record resource
+    inner = candidate.get(record_resource)
+    if isinstance(inner, dict) and ("head_seq" in inner or "head_oid" in inner):
+        return {"head_seq": inner.get("head_seq"), "head_oid": inner.get("head_oid")}
+    return {}
 
 
 def _payload_hash(payload: dict[str, Any]) -> str:

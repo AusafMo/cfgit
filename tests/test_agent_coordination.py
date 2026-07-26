@@ -115,6 +115,30 @@ def test_renew_expired_lease_is_blocked() -> None:
     assert adapter.get_lease(lease["lease_id"])["status"] == "expired"
 
 
+def test_coordinator_renew_extends_owned_lease() -> None:
+    """The public coordinator.renew (behind cfg_agent_renew) extends a lease the session owns."""
+    from cfg_agent import AgentCoordinator, AgentStateError, InMemoryAgentStateAdapter
+
+    coordinator = AgentCoordinator(InMemoryAgentStateAdapter())
+    session = coordinator.start_session(task="long work", agent_id="agent.a")
+    lease = coordinator.claim(
+        session_id=session["session_id"],
+        resource="agent_configs:refund_resolution:/instructions",
+        ttl_seconds=60,
+    )
+    renewed = coordinator.renew(
+        session_id=session["session_id"], lease_id=lease["lease_id"], ttl_seconds=600
+    )
+    assert renewed["lease_id"] == lease["lease_id"]
+    assert renewed["expires_at"] > lease["expires_at"]  # extended
+
+    # a different session cannot renew someone else's lease
+    other = coordinator.start_session(task="other", agent_id="agent.b")
+    with pytest.raises(AgentStateError) as raised:
+        coordinator.renew(session_id=other["session_id"], lease_id=lease["lease_id"])
+    assert raised.value.code == "lease_not_owned"
+
+
 def test_mongo_renew_lease_uses_conditional_update_without_upsert() -> None:
     pytest.importorskip("pymongo")
     from cfg_agent.adapters.mongo import MongoAgentStateAdapter
@@ -454,6 +478,43 @@ def test_validate_patch_blocks_stale_base() -> None:
             intent_id=intent["intent_id"],
         )
 
+    assert raised.value.code == "base_moved"
+
+
+@pytest.mark.parametrize(
+    "base_arg,intent_base",
+    [
+        ({"head_seq": 999}, None),                      # flat base= param
+        ({"demo:alpha": {"head_seq": 999}}, None),      # nested base= param
+        (None, {"head_seq": 999}),                      # flat intent.expected_base
+        (None, {"demo:alpha": {"head_seq": 999}}),      # nested intent.expected_base
+    ],
+)
+def test_validate_patch_base_moved_accepts_both_shapes(base_arg, intent_base) -> None:
+    """The stale-write guarantee must fire regardless of whether the base is given flat or nested,
+    via base= or via the intent — it must never silently fail open on shape alone."""
+    from cfg_agent import AgentCoordinator, AgentStateError, InMemoryAgentStateAdapter
+
+    engine, _row = _clean_engine({"id": "alpha", "value": 1})
+    coordinator = AgentCoordinator(InMemoryAgentStateAdapter())
+    session = coordinator.start_session(task="edit", agent_id="agent.a")
+    coordinator.claim(session_id=session["session_id"], resource="demo:alpha:/value")
+    intent = coordinator.open_intent(
+        session_id=session["session_id"],
+        resources=["demo:alpha"],
+        summary="change value",
+        planned_paths=["/value"],
+        expected_base=intent_base,
+    )
+    with pytest.raises(AgentStateError) as raised:
+        coordinator.validate_patch(
+            engine=engine,
+            session_id=session["session_id"],
+            record="demo:alpha",
+            patch=[{"op": "replace", "path": "/value", "value": 2}],
+            intent_id=intent["intent_id"],
+            base=base_arg,
+        )
     assert raised.value.code == "base_moved"
 
 

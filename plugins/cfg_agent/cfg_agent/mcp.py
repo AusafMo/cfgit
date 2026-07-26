@@ -98,6 +98,20 @@ def cfg_agent_release(
 
 
 @mcp.tool()
+def cfg_agent_renew(
+    session_id: str,
+    lease_id: str,
+    ttl_seconds: int | None = None,
+    config_file: str | None = None,
+    env: str = "dev",
+) -> dict[str, Any]:
+    """Extend an active lease this session owns (keep a claim alive for long-running work)."""
+    return _actions(config_file, env).renew(
+        {"session_id": session_id, "lease_id": lease_id, "ttl_seconds": ttl_seconds}
+    )
+
+
+@mcp.tool()
 def cfg_agent_open_intent(
     session_id: str,
     resources: list[str],
