@@ -7,13 +7,16 @@ private customer setup.
 
 Typical demo flow:
   python examples/seed_support_demo.py --reset
-  cfg --config-file examples/cfgit-support-demo.toml init
-  cfg --config-file examples/cfgit-support-demo.toml import --all -m "initial import"
+  python examples/seed_support_demo.py --enrich    # builds branches, PRs, tags, deep history (drives the cfg CLI)
   python examples/seed_support_demo.py --drift
 """
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import subprocess
+import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -48,6 +51,14 @@ def main() -> None:
         action="store_true",
         help="apply synthetic out-of-band edits after the base records have been imported",
     )
+    parser.add_argument(
+        "--enrich",
+        action="store_true",
+        help=(
+            "drive the cfg CLI to build genuine branches, PRs, tags, and deep history "
+            "after --reset has seeded the base records"
+        ),
+    )
     args = parser.parse_args()
 
     client = MongoClient(args.uri)
@@ -64,8 +75,309 @@ def main() -> None:
         print(f"applied synthetic cfgit demo drift in Mongo database {args.db!r}")
         return
 
+    if args.enrich:
+        enrich(db, args)
+        print(f"enriched cfgit demo history in Mongo database {args.db!r}")
+        return
+
     seed_base(db, now)
     print(f"seeded synthetic cfgit demo data in Mongo database {args.db!r}")
+
+
+_DEMO_AUTHOR = "demo.user@example.com"
+_CFG_CONFIG = "examples/cfgit-support-demo.toml"
+
+
+def _cfg(
+    args: argparse.Namespace,
+    *cmd: str,
+    branch: str | None = None,
+    tolerate_error: bool = False,
+) -> dict[str, Any] | None:
+    """Run `cfg --config-file ... --json [--branch B] <cmd...>` with CFG_AUTHOR set.
+
+    Returns the parsed JSON response dict (or None when there is no JSON output).
+    Strips any leading human-readable log lines that precede the JSON object/array.
+    On non-zero exit, logs stderr and either raises SystemExit or returns None based
+    on *tolerate_error*.
+
+    Pass *branch* to commit to a branch other than main (emits --branch before the
+    subcommand in the global-flags position).
+    """
+    global_flags = ["--config-file", _CFG_CONFIG, "--json"]
+    if branch:
+        global_flags += ["--branch", branch]
+    full_cmd = ["cfg", *global_flags, *cmd]
+    label = (f"--branch {branch} " if branch else "") + " ".join(cmd)
+    print(f"  cfg {label}")
+    env = {**os.environ, "CFG_AUTHOR": _DEMO_AUTHOR}
+    result = subprocess.run(full_cmd, env=env, capture_output=True, text=True)
+    if result.returncode != 0:
+        if tolerate_error:
+            print(f"    (tolerated non-zero exit {result.returncode}): {result.stderr.strip()[:200]}")
+            return None
+        print(f"    ERROR (exit {result.returncode}): {result.stderr.strip()[:400]}")
+        raise SystemExit(f"cfg command failed: {' '.join(cmd)}")
+    raw = result.stdout.strip()
+    if not raw:
+        return None
+    # Strip any leading human-readable log lines before the first JSON character.
+    lines = raw.splitlines()
+    json_lines: list[str] = []
+    found = False
+    for line in lines:
+        stripped = line.lstrip()
+        if not found and (stripped.startswith("{") or stripped.startswith("[")):
+            found = True
+        if found:
+            json_lines.append(line)
+    if not json_lines:
+        return None
+    try:
+        return json.loads("\n".join(json_lines))  # type: ignore[return-value]
+    except json.JSONDecodeError:
+        return None
+
+
+def _cfg_branch_commit(
+    args: argparse.Namespace,
+    db: Any,
+    collection: str,
+    record_id: str,
+    updates: dict[str, Any],
+    branch: str,
+    message: str,
+) -> dict[str, Any] | None:
+    """Fetch the live document from MongoDB, apply *updates*, write to a tempfile, and
+    run `cfg --branch <branch> commit <collection:record_id> --from <tmpfile> -m <msg>`.
+
+    This is the correct way to make branch commits — `cfg set` does not support --branch.
+    The *updates* dict is merged (shallow) into the live document before committing.
+    Returns the parsed JSON response or None.
+    """
+    coll = db[collection]
+    # We don't know the id_field at runtime, so find by scanning for the record.
+    # The config id_fields are known — use a heuristic: find doc where any value == record_id.
+    doc = None
+    for candidate_field in (
+        "config_id", "model_path", "rule_id", "tool_id", "policy_id",
+        "escalation_id", "suite_id", "rollout_id", "source_id",
+    ):
+        doc = coll.find_one({candidate_field: record_id})
+        if doc is not None:
+            break
+    if doc is None:
+        print(f"    WARNING: could not find {collection}:{record_id} in MongoDB; skipping branch commit")
+        return None
+    # Remove non-serialisable BSON types (ObjectId, datetime) from the doc copy.
+    serialisable: dict[str, Any] = {}
+    for k, v in doc.items():
+        if k == "_id":
+            continue
+        if hasattr(v, "isoformat"):
+            serialisable[k] = v.isoformat()
+        else:
+            serialisable[k] = v
+    serialisable.update(updates)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="cfgit_enrich_", delete=False
+    ) as fh:
+        json.dump(serialisable, fh)
+        tmppath = fh.name
+    try:
+        return _cfg(
+            args,
+            "commit", f"{collection}:{record_id}", "--from", tmppath, "-m", message,
+            branch=branch,
+        )
+    finally:
+        try:
+            os.unlink(tmppath)
+        except OSError:
+            pass
+
+
+def enrich(db: Any, args: argparse.Namespace) -> None:
+    """Drive the real cfg CLI to produce genuine cfgit history, branches, PRs, and tags.
+
+    This is idempotent in the sense that init/import errors are tolerated (they are
+    benign when the database has already been initialised). All other operations
+    (set, branch create, pr create/merge, tag, adopt) will raise on failure.
+
+    All cfg history is authored as demo.user@example.com — never a real personal email.
+    """
+    now = datetime.now(timezone.utc)
+
+    # ── 0. Ensure base records exist, then init + import ──────────────────────
+    print("==> enrich: seeding base records")
+    seed_base(db, now)
+
+    print("==> enrich: cfg init (tolerated if already done)")
+    _cfg(args, "init", tolerate_error=True)
+
+    print("==> enrich: cfg import --all (tolerated if already done)")
+    _cfg(args, "import", "--all", "-m", "initial import", tolerate_error=True)
+
+    # ── 1. Deep history on agent_configs:refund_resolution ───────────────────
+    print("==> enrich: deep history — agent_configs:refund_resolution")
+    _cfg(
+        args,
+        "set", "agent_configs:refund_resolution",
+        "automation_threshold=0.83",
+        "-m", "raise automation threshold to 0.83 after quality gate passed",
+    )
+    _cfg(
+        args,
+        "set", "agent_configs:refund_resolution",
+        "handoffs=str:billing_disputes,trust_safety_review,support_orchestrator",
+        "-m", "add support_orchestrator to handoff chain for supervisor escalations",
+    )
+    _cfg(
+        args,
+        "set", "agent_configs:refund_resolution",
+        "max_credit_usd=300",
+        "-m", "raise max_credit_usd to 300 to cover standard plus-tier orders",
+    )
+
+    # ── 2. Deep history on policy_rules:refund_window_standard ───────────────
+    print("==> enrich: deep history — policy_rules:refund_window_standard")
+    _cfg(
+        args,
+        "set", "policy_rules:refund_window_standard",
+        "rule_text=str:Refunds are allowed within 21 days of fulfillment when the account is in good standing and the order is not already disputed.",
+        "-m", "tighten refund window from 30 to 21 days per finance review",
+    )
+    _cfg(
+        args,
+        "set", "policy_rules:refund_window_standard",
+        "severity=str:high",
+        "-m", "escalate severity to high — finance compliance requirement",
+    )
+
+    # ── 3. One commit on modelgarden_models:openai/gpt-4.1 ───────────────────
+    print("==> enrich: history — modelgarden_models:openai/gpt-4.1")
+    _cfg(
+        args,
+        "set", "modelgarden_models:openai/gpt-4.1",
+        "notes=str:promoted to default premium model for trust_safety and billing agents",
+        "-m", "mark gpt-4.1 as default premium model and add promotion note",
+    )
+
+    # ── 4. System tag ─────────────────────────────────────────────────────────
+    print("==> enrich: tag prod-2026-w31")
+    _cfg(args, "tag", "prod-2026-w31")
+
+    # ── 5. Branch: refund-policy-tightening (open PR, leave open) ────────────
+    print("==> enrich: branch refund-policy-tightening")
+    _cfg(args, "branch", "create", "refund-policy-tightening", "-m", "draft: tighten chargeback rule")
+    # Use cfg commit --from <tmpfile> because cfg set does not route through --branch.
+    _cfg_branch_commit(
+        args, db,
+        collection="policy_rules",
+        record_id="chargeback_no_refund_v1",
+        updates={
+            "rule_text": (
+                "If a payment has an active chargeback, representment, or pre-arbitration case,"
+                " agents must not issue any refund or credit. Attach all evidence and escalate"
+                " immediately to finance operations."
+            ),
+            "severity": "critical",
+        },
+        branch="refund-policy-tightening",
+        message="extend chargeback rule to cover pre-arbitration; escalate severity to critical",
+    )
+    pr_rpt = _cfg(
+        args,
+        "pr", "create",
+        "--head", "refund-policy-tightening",
+        "--base", "main",
+        "-m", "Tighten chargeback refund boundary — extend rule text and raise severity to critical",
+    )
+    if pr_rpt:
+        pr_id = pr_rpt.get("id", "<unknown>")
+        print(f"    opened PR {pr_id} (refund-policy-tightening -> main) — leaving open")
+
+    # ── 6. Branch: model-routing-upgrade (open PR, leave open) ───────────────
+    print("==> enrich: branch model-routing-upgrade")
+    _cfg(args, "branch", "create", "model-routing-upgrade", "-m", "draft: promote gpt-4.1 to default")
+    _cfg_branch_commit(
+        args, db,
+        collection="modelgarden_models",
+        record_id="openai/gpt-4.1",
+        updates={
+            "tier": "default",
+            "notes": "Promoted from premium to default tier — approved by model-ops 2026-w31",
+        },
+        branch="model-routing-upgrade",
+        message="promote gpt-4.1 to default tier for routing upgrade",
+    )
+    pr_mru = _cfg(
+        args,
+        "pr", "create",
+        "--head", "model-routing-upgrade",
+        "--base", "main",
+        "-m", "Model routing upgrade — promote openai/gpt-4.1 to default tier",
+    )
+    if pr_mru:
+        pr_id = pr_mru.get("id", "<unknown>")
+        print(f"    opened PR {pr_id} (model-routing-upgrade -> main) — leaving open")
+
+    # ── 7. Branch: deprecate-legacy-router (open PR, then merge) ─────────────
+    print("==> enrich: branch deprecate-legacy-router")
+    _cfg(
+        args, "branch", "create", "deprecate-legacy-router",
+        "-m", "draft: retire logistics_router via deprecation flag",
+    )
+    _cfg_branch_commit(
+        args, db,
+        collection="routing_policies",
+        record_id="logistics_router",
+        updates={
+            "deprecated": True,
+            "deprecation_note": (
+                "Superseded by global_support_router v2."
+                " Scheduled for removal after 2026-w35."
+            ),
+        },
+        branch="deprecate-legacy-router",
+        message="flag logistics_router as deprecated — superseded by global_support_router v2",
+    )
+    pr_dlr = _cfg(
+        args,
+        "pr", "create",
+        "--head", "deprecate-legacy-router",
+        "--base", "main",
+        "-m", "Deprecate legacy logistics_router — add deprecation flag and removal note",
+    )
+    if pr_dlr:
+        pr_id_dlr = pr_dlr.get("id")
+        print(f"    opened PR {pr_id_dlr} (deprecate-legacy-router -> main) — will merge")
+        if pr_id_dlr:
+            print("==> enrich: merging deprecate-legacy-router PR")
+            _cfg(args, "pr", "merge", pr_id_dlr, "-m", "merge: retire logistics_router deprecation flag")
+        else:
+            print("    WARNING: could not parse PR id from response; skipping merge")
+
+    # ── 8. Adopt: out-of-band edit + cfg adopt ────────────────────────────────
+    print("==> enrich: out-of-band edit to escalation_policies:operations_handoff for adopt demo")
+    db.escalation_policies.update_one(
+        {"escalation_id": "operations_handoff"},
+        {
+            "$set": {
+                "sla_minutes": 90,
+                "queues": ["carrier_exceptions", "warehouse_ops", "express_ops"],
+                "updated_by": "admin-console-hotfix",
+                "updated_at": now,
+            }
+        },
+    )
+    _cfg(
+        args,
+        "adopt", "escalation_policies:operations_handoff",
+        "-m", "adopt admin-console hotfix — sla_minutes 120→90, added express_ops queue",
+    )
+
+    print("==> enrich: done")
 
 
 def seed_base(db: Any, now: datetime) -> None:

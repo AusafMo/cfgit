@@ -114,6 +114,7 @@ activemq-data/
 
 # cfgit local state
 .cfg/
+.cfgit/
 /.cfg.toml
 
 # Local project notes and recording drafts
