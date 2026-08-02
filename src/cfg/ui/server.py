@@ -266,6 +266,11 @@ UI_HTML = r"""<!doctype html>
       --disp:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;
       --body:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
       --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      /* dashed drift ring, drawn as an SVG stroke so the dashes divide the circumference
+         evenly (a CSS dashed border bunches them to one side, and too many small dashes read
+         as a fuzzy dotted ring). Used as a mask; color comes from --amber. 5 clean dashes:
+         (4.0 dash + 2.28 gap) x5 ~= circumference 2*pi*5 = 31.4. */
+      --drift-ring:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 13 13"><circle cx="6.5" cy="6.5" r="5" fill="none" stroke="black" stroke-width="1.8" stroke-dasharray="4.0 2.28" stroke-linecap="butt"/></svg>');
     }
     /* DARK: deep slate, never pure black; calm on the eyes.
        Accent is monochrome (ink) + a single restrained GitHub green for primary actions. */
@@ -479,7 +484,8 @@ UI_HTML = r"""<!doctype html>
     .node.sel{background:var(--panel2)}
     .node.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
     /* graph rail: vertical line + node markers */
-    .node .line{position:absolute;left:21px;top:0;bottom:0;width:2px;background:var(--edge2)}
+    /* line center (20.5 + 2/2 = 21.5) is aligned to the marker center (15 + 13/2 = 21.5). */
+    .node .line{position:absolute;left:20.5px;top:0;bottom:0;width:2px;background:var(--edge2)}
     .node:first-child .line{top:20px}
     .node:last-child .line{bottom:calc(100% - 20px)}
     .node .mk{position:absolute;left:15px;top:14px;width:13px;height:13px;border-radius:50%;
@@ -488,8 +494,16 @@ UI_HTML = r"""<!doctype html>
     .node.restore .mk{border-color:var(--sky)}
     .node.adopt .mk{border-color:var(--moss)}
     .node.importt .mk{border-color:var(--faint)}
-    /* drift = open dashed ring in amber, sitting above the committed line */
-    .node.live .mk{border:2px dashed var(--amber);background:var(--amber-bg);width:14px;height:14px;left:14.5px;animation:pulse 2.4s ease-in-out infinite}
+    /* drift = open dashed ring in amber. A CSS `border:dashed` renders its dashes from a
+       fixed origin, so they bunch to one side and the ring reads as off-center. Instead we
+       draw the ring as an SVG stroke whose dash pattern divides the circumference evenly
+       (perfectly symmetric), applied as a mask so it still respects the theme amber var.
+       An opaque base fill (pane bg + amber tint) keeps the timeline rail from showing through. */
+    .node.live .mk{border:0;z-index:2;background:linear-gradient(var(--amber-bg),var(--amber-bg)),var(--panel);
+      animation:pulse 2.4s ease-in-out infinite}
+    .node.live .mk::after{content:"";position:absolute;inset:0;background:var(--amber);
+      -webkit-mask:var(--drift-ring) center/contain no-repeat;mask:var(--drift-ring) center/contain no-repeat}
+
     @keyframes pulse{0%,100%{box-shadow:0 0 0 0 var(--amber-bg)}50%{box-shadow:0 0 0 5px transparent}}
     .node .msg{font-size:13px;line-height:1.4;margin-bottom:4px}
     .node.live .msg{color:var(--amber);font-weight:500}
@@ -968,7 +982,7 @@ document.addEventListener("click",e=>{if(!e.target.closest(".selectbox"))closeSe
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSelectMenus();});
 syncSelectMenus();
 
-async function loadState(){
+async function loadState(isRefresh){
   const st=await fetch("/api/state?"+qs()).then(r=>r.json()).catch(e=>({error:String(e)}));
   if(st.data&&st.data.whoami){const w=st.data.whoami;S.who=w;const id=w.identity||{};
     const disp=w.identity_display||w.author||"";
@@ -995,7 +1009,10 @@ async function loadState(){
   if(Object.keys(S.open).length===0){colls.forEach(c=>{S.open[c]=S.records.some(r=>r.collection===c&&isDrift(r.state));});
     if(!Object.values(S.open).some(Boolean)&&colls[0])S.open[colls[0]]=true;}
   renderFilters();renderTree();
-  if(!S.sel&&!document.querySelector(".app")?.classList.contains("pr-mode")&&!document.querySelector(".app")?.classList.contains("branches-mode"))renderRecentHistory();
+  // Auto-default to the History/Activity view only on the FIRST load. On a refresh, softRefresh()
+  // restores whatever tab you were on — so refreshing on Records (with nothing selected) must not
+  // yank you to History.
+  if(!isRefresh&&!S.sel&&!document.querySelector(".app")?.classList.contains("pr-mode")&&!document.querySelector(".app")?.classList.contains("branches-mode"))renderRecentHistory();
 }
 
 function branchNames(){return [...new Set((S.branches.length?S.branches.map(b=>b.name):["main"]).filter(Boolean))];}
@@ -1771,7 +1788,16 @@ $("find").addEventListener("input",e=>{S.q=e.target.value;renderTree();});
 // Reload state from the server but stay on the current tab/record — used by the Refresh
 // button and by auto-refresh so new drift/branches/PRs (created in a terminal or another
 // tab) show up without a manual reload.
-function softRefresh(){const keep=S.sel, prMode=inPrMode(), branchesMode=inBranchesMode();return loadState().then(()=>{if(prMode)renderPrWorkspace();else if(branchesMode)renderBranchesWorkspace();else if(keep)selectRecord(keep);});}
+function inActivityMode(){return $("navHistoryTab")?.classList.contains("on");}
+function softRefresh(){const keep=S.sel, prMode=inPrMode(), branchesMode=inBranchesMode(), activityMode=inActivityMode();
+  return loadState(true).then(()=>{
+    if(prMode){renderPrWorkspace();return;}
+    if(branchesMode){renderBranchesWorkspace();return;}
+    if(activityMode){renderRecentHistory();return;}
+    if(keep){selectRecord(keep);return;}
+    // Records tab with nothing selected: stay put (tree already re-rendered above).
+    setNav("navRecordsTab");
+  });}
 $("refresh").onclick=()=>softRefresh();
 // Auto-refresh: pick up out-of-band changes without a manual reload. We skip while a modal
 // is open or a diff/impact panel is loading so we never yank the view out from under you.
