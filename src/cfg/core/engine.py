@@ -10,7 +10,7 @@ import re
 import uuid
 from typing import Any
 
-from cfg.adapters.base import AtomicityUnavailable, NoSuchConfig, StorageAdapter
+from cfg.adapters.base import ApplyItem, AtomicityUnavailable, NoSuchConfig, StorageAdapter
 from cfg.core.authz import authorize_mutation
 from cfg.core.config import CollectionConfig, ProjectConfig
 from cfg.core.diff import diff_values, format_diff
@@ -361,80 +361,94 @@ class Engine:
         if branch_ref.get("head_commit_id") != pr.get("head_commit_id"):
             raise ValueError("PR is stale: head branch moved after PR creation")
         latest = self._branch_latest_by_record(pr["head_branch"])
-        if len(latest) > 1:
-            raise AtomicityUnavailable(
-                "multi-record PR merge needs adapter-level batch atomicity; split into one-record PRs for v1"
-            )
         if not latest:
             raise ValueError("PR has no records to merge")
 
-        ref, commit = next(iter(latest.items()))
-        coll = self.config.collection(ref.collection)
-        live = self.adapter.get_record(ref.collection, ref.record_id)
-        if live is None:
-            raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
-        head = self.adapter.get_head(ref.collection, ref.record_id)
-        expected_head = head.get("oid") if head else None
-        expected_live = hash_doc(live, coll)
-        base_head = (commit.get("meta") or {}).get("base_head_oid")
-        if expected_head != base_head:
-            return {
-                "state": "stale",
-                "reason": "main moved since branch commit",
-                "collection": ref.collection,
-                "record_id": ref.record_id,
-                "head_oid": expected_head,
-                "branch_base_oid": base_head,
-                "runtime_mutated": False,
-            }
-        if head and expected_live != expected_head:
-            return {
-                "state": "changed_outside_cfgit",
-                "collection": ref.collection,
-                "record_id": ref.record_id,
-                "live_oid": expected_live,
-                "head_oid": expected_head,
-                "runtime_mutated": False,
-            }
-        entry = self._entry(
-            ref,
-            commit["doc"],
-            coll,
-            message=message or pr["message"],
-            op="merge",
-            parent_oid=expected_head,
-            meta={
-                "source_pr_id": pr_id,
-                "source_branch": pr["head_branch"],
-                "source_branch_commit_id": commit["id"],
-                "source_branch_oid": commit["oid"],
-            },
-        )
-        result = self.adapter.apply(
-            collection=ref.collection,
-            record_id=ref.record_id,
-            new_doc=commit["doc"],
-            entry=entry,
-            expected_head_oid=expected_head,
-            expected_live_oid=expected_live,
-            make_head=True,
-        )
+        items: list[ApplyItem] = []
+        expected_results: list[dict[str, Any]] = []
+        for ref, commit in sorted(latest.items(), key=lambda item: (item[0].collection, item[0].record_id)):
+            coll = self.config.collection(ref.collection)
+            live = self.adapter.get_record(ref.collection, ref.record_id)
+            if live is None:
+                raise NoSuchConfig(f"{ref.collection}:{ref.record_id}")
+            head = self.adapter.get_head(ref.collection, ref.record_id)
+            expected_head = head.get("oid") if head else None
+            expected_live = hash_doc(live, coll)
+            base_head = (commit.get("meta") or {}).get("base_head_oid")
+            if expected_head != base_head:
+                return {
+                    "state": "stale",
+                    "reason": "main moved since branch commit",
+                    "collection": ref.collection,
+                    "record_id": ref.record_id,
+                    "head_oid": expected_head,
+                    "branch_base_oid": base_head,
+                    "runtime_mutated": False,
+                }
+            if head and expected_live != expected_head:
+                return {
+                    "state": "changed_outside_cfgit",
+                    "collection": ref.collection,
+                    "record_id": ref.record_id,
+                    "live_oid": expected_live,
+                    "head_oid": expected_head,
+                    "runtime_mutated": False,
+                }
+            entry = self._entry(
+                ref,
+                commit["doc"],
+                coll,
+                message=message or pr["message"],
+                op="merge",
+                parent_oid=expected_head,
+                meta={
+                    "source_pr_id": pr_id,
+                    "source_branch": pr["head_branch"],
+                    "source_branch_commit_id": commit["id"],
+                    "source_branch_oid": commit["oid"],
+                },
+            )
+            next_seq = int(head.get("seq", 0)) + 1 if head else 1
+            items.append(
+                ApplyItem(
+                    collection=ref.collection,
+                    record_id=ref.record_id,
+                    new_doc=commit["doc"],
+                    entry=entry,
+                    expected_head_oid=expected_head,
+                    expected_live_oid=expected_live,
+                    make_head=True,
+                )
+            )
+            expected_results.append(
+                {
+                    "collection": ref.collection,
+                    "record_id": ref.record_id,
+                    "seq": next_seq,
+                    "oid": entry["oid"],
+                }
+            )
+
         now = self.adapter.now()
         merged_pr = {
             **pr,
             "status": "merged",
             "merged_at": now,
             "updated_at": now,
-            "merge_result": {
-                "collection": result.collection,
-                "record_id": result.record_id,
-                "seq": result.seq,
-                "oid": result.oid,
-            },
+            "merge_results": expected_results,
             "runtime_mutated": True,
         }
-        self.adapter.put_ref(merged_pr)
-        return {"state": "merged", "pr": pr_id, **merged_pr["merge_result"], "runtime_mutated": True}
+        if len(expected_results) == 1:
+            merged_pr["merge_result"] = expected_results[0]
+        results = self.adapter.apply_many(items=items, put_refs=[merged_pr])
+        result_docs = [
+            {"collection": r.collection, "record_id": r.record_id, "seq": r.seq, "oid": r.oid}
+            for r in results
+        ]
+        out: dict[str, Any] = {"state": "merged", "pr": pr_id, "results": result_docs, "runtime_mutated": True}
+        if len(result_docs) == 1:
+            out.update(result_docs[0])
+        return out
 
     def status(self, ref: RecordRef | None = None) -> list[StatusRow]:
         refs = [ref] if ref else self._all_refs(include_history=True)

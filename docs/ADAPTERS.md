@@ -103,3 +103,7 @@ The important contract is `apply(...)`, which atomically:
 
 If a datastore cannot guarantee that atomicity, the adapter should report limited
 capabilities and refuse unsafe operations rather than pretending they are safe.
+
+Adapters that support branch PR merge also implement `apply_many(...)`, which
+runs the same checks and writes for several records inside one transaction and
+can persist sidecar refs, such as marking a PR merged, before commit.

@@ -200,9 +200,9 @@ To mutate runtime, use: cfg pr merge <pr>
 7. For each touched record, confirm canonical `main` HEAD still equals `base_oid`.
 8. For each touched record, confirm live runtime hash still equals `base_oid`.
 9. For multi-record PRs, require adapter atomicity.
-10. Apply runtime docs and append canonical history entries in one transaction.
-11. Move canonical heads.
-12. Mark PR merged.
+10. Use the adapter batch apply path to write runtime docs, append canonical
+    history entries, move canonical heads, and mark the PR merged in one
+    transaction.
 
 If any check fails, runtime remains unchanged and the result includes
 `runtime_mutated = false`.

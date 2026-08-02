@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from cfg.adapters.base import (
+    ApplyItem,
     ApplyResult,
     AtomicityReport,
     AtomicityUnavailable,
@@ -511,7 +512,7 @@ def test_pr_merge_blocks_stale_main_head() -> None:
     assert adapter.records[("demo", "alpha")]["value"] == 3
 
 
-def test_pr_merge_blocks_multi_record_until_batch_atomicity_exists() -> None:
+def test_pr_merge_applies_multi_record_batch_atomically() -> None:
     coll = CollectionConfig(name="demo", id_field="id")
     alpha = {"id": "alpha", "value": 1}
     beta = {"id": "beta", "value": 10}
@@ -535,11 +536,56 @@ def test_pr_merge_blocks_multi_record_until_batch_atomicity_exists() -> None:
     )
     pr = engine.pr_create(base="main", head="router-test", message="review batch")
 
-    with pytest.raises(AtomicityUnavailable, match="multi-record PR merge"):
+    result = engine.pr_merge(pr["id"])
+
+    assert result["state"] == "merged"
+    assert result["runtime_mutated"] is True
+    assert [item["record_id"] for item in result["results"]] == ["alpha", "beta"]
+    assert adapter.records[("demo", "alpha")]["value"] == 2
+    assert adapter.records[("demo", "beta")]["value"] == 20
+    assert [row["op"] for row in adapter.history[-2:]] == ["merge", "merge"]
+    assert adapter.get_ref("pr", pr["id"])["status"] == "merged"
+    assert [item["record_id"] for item in adapter.get_ref("pr", pr["id"])["merge_results"]] == ["alpha", "beta"]
+
+
+def test_pr_merge_batch_rolls_back_when_record_drifts_during_apply() -> None:
+    coll = CollectionConfig(name="demo", id_field="id")
+    alpha = {"id": "alpha", "value": 1}
+    beta = {"id": "beta", "value": 10}
+    row_a = _history_row(coll, alpha, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    row_b = _history_row(coll, beta, seq=1, valid_from=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    engine, adapter = _engine(
+        collection=coll,
+        records={("demo", "alpha"): alpha, ("demo", "beta"): beta},
+        history=[row_a, row_b],
+        heads={("demo", "alpha"): row_a, ("demo", "beta"): row_b},
+        branches=BranchesConfig(enabled=True),
+    )
+    engine.branch_create("router-test")
+    engine.branch_commit_many(
+        "router-test",
+        [
+            (RecordRef("demo", "alpha"), {"id": "alpha", "value": 2}),
+            (RecordRef("demo", "beta"), {"id": "beta", "value": 20}),
+        ],
+        message="draft batch",
+    )
+    pr = engine.pr_create(base="main", head="router-test", message="review batch")
+    original_apply_many = adapter.apply_many
+
+    def drift_then_apply(*, items: list[ApplyItem], put_refs: list[dict] | None = None) -> list[ApplyResult]:
+        adapter.records[("demo", "beta")] = {"id": "beta", "value": 999}
+        return original_apply_many(items=items, put_refs=put_refs)
+
+    adapter.apply_many = drift_then_apply  # type: ignore[method-assign]
+
+    with pytest.raises(StaleLive):
         engine.pr_merge(pr["id"])
 
     assert adapter.records[("demo", "alpha")]["value"] == 1
-    assert adapter.records[("demo", "beta")]["value"] == 10
+    assert adapter.records[("demo", "beta")]["value"] == 999
+    assert [row["op"] for row in adapter.history] == ["import", "import"]
+    assert adapter.get_ref("pr", pr["id"])["status"] == "open"
 
 
 class FakeAdapter:
@@ -698,6 +744,35 @@ class FakeAdapter:
         if make_head:
             self.heads[key] = stored
         return ApplyResult(collection=collection, record_id=record_id, seq=seq, oid=stored["oid"], head_oid=stored["oid"])
+
+    def apply_many(self, *, items: list[ApplyItem], put_refs: list[dict] | None = None) -> list[ApplyResult]:
+        records = deepcopy(self.records)
+        history = deepcopy(self.history)
+        heads = deepcopy(self.heads)
+        refs = deepcopy(self.refs)
+        try:
+            results = [
+                self.apply(
+                    collection=item.collection,
+                    record_id=item.record_id,
+                    new_doc=item.new_doc,
+                    entry=item.entry,
+                    expected_head_oid=item.expected_head_oid,
+                    expected_live_oid=item.expected_live_oid,
+                    make_head=item.make_head,
+                    seed_missing=item.seed_missing,
+                )
+                for item in items
+            ]
+            for doc in put_refs or []:
+                self.put_ref(doc)
+            return results
+        except Exception:
+            self.records = records
+            self.history = history
+            self.heads = heads
+            self.refs = refs
+            raise
 
     def add_tag(self, *, collection: str, record_id: str, seq: int, tag: str) -> None:
         for row in self.history:

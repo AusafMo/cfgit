@@ -288,7 +288,9 @@ cfg pr merge <pr-id>
 Branching is opt-in with `[branches] enabled = true`. `branch`, branch commits,
 branch diff, and PR creation write only cfgit draft/review refs. The only branch
 command that mutates runtime is `cfg pr merge`, and it refuses stale main heads
-or un-adopted live drift.
+or un-adopted live drift. Multi-record PR merges require adapter batch atomicity:
+all runtime records, canonical history/head updates, and PR closure commit
+together or roll back together.
 
 `commit`, `import`, and `adopt` scan the would-be-stored document for secret-like
 field names and values from `[secrets]`. Fields listed in `secret_fields` are
@@ -524,6 +526,9 @@ Tools include:
 A portable skill lives at `skills/cfgit/SKILL.md`.
 `cfg_impact` accepts the same `against` list/string as the CLI `--against` flag,
 so MCP clients can request scoped narration without shelling out.
+`cfg_pr_merge` has the same runtime semantics as the CLI: it is the only branch
+or PR MCP tool that mutates runtime, and multi-record PRs are merged as one
+adapter-atomic batch when the backend supports that guarantee.
 
 If `cfg_log` or `cfg_show` returns `bad_config` with a message saying history
 exists under another env, the same database has been addressed with two

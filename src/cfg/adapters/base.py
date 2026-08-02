@@ -50,6 +50,18 @@ class ApplyResult:
 
 
 @dataclass
+class ApplyItem:
+    collection: str
+    record_id: str
+    new_doc: dict | None
+    entry: dict
+    expected_head_oid: str | None
+    expected_live_oid: str | None = None
+    make_head: bool = True
+    seed_missing: bool = False
+
+
+@dataclass
 class ReconcileReport:
     rolled_forward: list[str]
     rolled_back: list[str]
@@ -108,6 +120,7 @@ class StorageAdapter(Protocol):
     def apply(self, *, collection: str, record_id: str, new_doc: dict | None, entry: dict,
               expected_head_oid: str | None, expected_live_oid: str | None = None,
               make_head: bool = True, seed_missing: bool = False) -> ApplyResult: ...
+    def apply_many(self, *, items: list[ApplyItem], put_refs: list[dict] | None = None) -> list[ApplyResult]: ...
 
     # labels
     def add_tag(self, *, collection: str, record_id: str, seq: int, tag: str) -> None: ...

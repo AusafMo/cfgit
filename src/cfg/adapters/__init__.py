@@ -2,6 +2,7 @@
 """StorageAdapter implementations (the DB seam, SPEC §2). Mongo is first."""
 from cfg.adapters.base import (
     AmbiguousConfig,
+    ApplyItem,
     ApplyResult,
     AtomicityReport,
     HistoryEnvMismatch,
@@ -14,6 +15,7 @@ from cfg.adapters.base import (
 
 __all__ = [
     "StorageAdapter",
+    "ApplyItem",
     "ApplyResult",
     "ReconcileReport",
     "AtomicityReport",

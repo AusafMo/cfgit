@@ -466,6 +466,12 @@ def cfg_pr_merge(
     env: str = "dev",
     author: str | None = None,
 ) -> dict[str, Any]:
+    """Merge an open PR through the shared action layer.
+
+    Multi-record PRs use the adapter batch-atomic merge path. If that guarantee
+    is unavailable, the envelope returns `atomicity_unavailable` and runtime is
+    left unchanged.
+    """
     return _call("pr_merge", {"id": id, "message": message}, config_file=config_file, env=env, author=author)
 
 
