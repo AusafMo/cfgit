@@ -488,8 +488,10 @@ UI_HTML = r"""<!doctype html>
     .node.restore .mk{border-color:var(--sky)}
     .node.adopt .mk{border-color:var(--moss)}
     .node.importt .mk{border-color:var(--faint)}
-    /* drift = open dashed ring in amber, sitting above the committed line */
-    .node.live .mk{border:2px dashed var(--amber);background:var(--amber-bg);width:14px;height:14px;left:14.5px;animation:pulse 2.4s ease-in-out infinite}
+    /* drift = open dashed ring in amber. Same size/position as the committed marker so it
+       aligns on the rail; opaque base fill (pane bg) + amber tint so the rail can't show
+       through the translucent center. */
+    .node.live .mk{border:2px dashed var(--amber);background:linear-gradient(var(--amber-bg),var(--amber-bg)),var(--panel);z-index:2;animation:pulse 2.4s ease-in-out infinite}
     @keyframes pulse{0%,100%{box-shadow:0 0 0 0 var(--amber-bg)}50%{box-shadow:0 0 0 5px transparent}}
     .node .msg{font-size:13px;line-height:1.4;margin-bottom:4px}
     .node.live .msg{color:var(--amber);font-weight:500}
