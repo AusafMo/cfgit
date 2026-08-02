@@ -10,9 +10,9 @@ same database. Your scripts and admin tools can still write it. cfgit sits besid
 the store, records what changed, and refuses to clobber changes it did not record.
 
 <p align="center">
-  <img src="docs/screenshots/01-diff.png" alt="Production-shaped support agent drift with collection stats, branch workflow controls, history, and line-aligned diff" width="32%" />
-  <img src="docs/screenshots/02-impact.png" alt="High-risk system-impact panel for a refund-resolution agent change with provider-backed LLM narration" width="32%" />
-  <img src="docs/screenshots/03-scoped-impact.png" alt="Scoped impact analysis with selected policy, eval, and rollout records plus provider-backed narration" width="32%" />
+  <img src="https://storage.googleapis.com/ausaf-public/portfolio-assets/cfgit-20260802/cfgit-diff.png" alt="Production-shaped support agent drift with collection stats, branch workflow controls, history, and line-aligned diff" width="32%" />
+  <img src="https://storage.googleapis.com/ausaf-public/portfolio-assets/cfgit-20260802/cfgit-impact.png" alt="High-risk system-impact panel for a refund-resolution agent change with provider-backed LLM narration" width="32%" />
+  <img src="https://storage.googleapis.com/ausaf-public/portfolio-assets/cfgit-20260802/cfgit-scoped-impact.png" alt="Scoped impact analysis with selected policy, eval, and rollout records plus provider-backed narration" width="32%" />
 </p>
 
 <p align="center">
@@ -20,8 +20,8 @@ the store, records what changed, and refuses to clobber changes it did not recor
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/04-branches.png" alt="Branches workspace with a default runtime branch, a draft branch, and a branch with an open cfgit PR, plus a compare-branches selector" width="48%" />
-  <img src="docs/screenshots/05-pull-request.png" alt="Open cfgit pull request reviewing a policy-rule change on a draft branch with a line-aligned diff and merge action" width="48%" />
+  <img src="https://storage.googleapis.com/ausaf-public/portfolio-assets/cfgit-20260802/cfgit-branches.png" alt="Branches workspace with a default runtime branch, a draft branch, and a branch with an open cfgit PR, plus a compare-branches selector" width="48%" />
+  <img src="https://storage.googleapis.com/ausaf-public/portfolio-assets/cfgit-20260802/cfgit-pull-request.png" alt="Open cfgit pull request reviewing a policy-rule change on a draft branch with a line-aligned diff and merge action" width="48%" />
 </p>
 
 <p align="center">
