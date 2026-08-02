@@ -95,6 +95,38 @@ Use memorable tokens only when the config containing hashes is private enough
 for your risk level. If hashes are public, short or guessable phrases can be
 attacked offline. Prefer longer private phrases for production.
 
+### How it works, and what it does (and doesn't) protect
+
+A common question: if `CFGIT_IDENTITY_TOKEN` lives only in the user's local
+environment and is never stored centrally, what is it actually protecting?
+
+It works like a password checked against a stored hash — but with no auth server
+and no session:
+
+- **Setup, once.** The user picks a private string. You hash it locally
+  (`cfg identity-hash`) and put **only the hash** in `.cfg.toml`. The raw string
+  is never written into cfgit — not in the config, not in history, not in logs.
+- **At runtime.** The user exports the raw string as `CFGIT_IDENTITY_TOKEN`.
+- **On every command.** cfgit hashes the env-var value right then and compares it
+  to the configured hashes. A match verifies the author; a mismatch is rejected.
+  There is no login step and no session — it re-verifies per command, statelessly.
+
+So it is deliberately decentralized: the **hash** is shared (in the config), the
+**raw token** stays local, and cfgit never has to hold a secret or phone home to a
+server. Anyone can read Alice's hash; that does not let them act as Alice.
+
+What this buys you, and what it doesn't:
+
+- It is **attribution / accountability**, not a hard security boundary. It proves
+  "this caller knows Alice's token," which makes cfgit's history trail hard to
+  spoof casually. It does **not** stop someone who steals Alice's raw token from
+  her environment, and public hashes over short phrases can be brute-forced
+  offline (hence: long, private phrases for production).
+- For a real security boundary, prefer **`db_principal`** identity (below): the
+  database itself authenticates the connection, and cfgit maps that verified DB
+  user to an author — no shared secret to leak. Combine with `enforced` mode and
+  locked-down DB write credentials so cfgit/CI is the only writer.
+
 ## Database Principal Identity
 
 `db_principal` uses the authenticated database connection identity:

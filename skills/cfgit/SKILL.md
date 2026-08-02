@@ -22,6 +22,26 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
 - Never paste raw human identity tokens into prompts, logs, commits, or history. For real setup secrets, prefer local CLI hashing: `printf '%s' '<private-token>' | cfg identity-hash --stdin`.
 - If `cfg log`, `cfg show`, or the MCP envelope returns `bad_config` saying history exists under another env, stop and switch to the env name that wrote that history or fix `.cfg.toml`; do not treat an empty history rail as proof that the record was never committed.
 
+## Setup from scratch
+
+When the user has a datastore but no `.cfg.toml` yet, help them go from zero to a working (and, for shared/production stores, secured) setup. Do not invent secrets or run destructive commands; propose the config and the exact commands, and let the user supply URIs and tokens.
+
+1. Write `.cfg.toml` at the repo/working root. Ask which datastore (`mongo`/`postgres`), which collections/tables to version, and the stable id field per collection. Put the connection string in an env var, never inline: `uri = "env:DEV_MONGODB_URI"`. Start with one `[env.<name>]`; add `prod` later. Minimal shape is in `docs/CONFIGURATION.md`.
+2. Choose the identity mode for each env (`docs/IDENTITY_AND_ATTRIBUTION.md`):
+   - `open` — no verified identity; fine for a local/dev store you own. `--author`/`CFG_AUTHOR` is taken at face value. A `needs_approval` env in `open` mode writes UNAUDITED — say so.
+   - `authenticated` / `enforced` — for shared or production stores. Requires a verified identity source before any write.
+3. For `authenticated`/`enforced` with token identity, set it up without leaking the secret:
+   - The user picks a private token string. Hash it locally: `printf '%s' '<private-token>' | cfg identity-hash --stdin` (never put the raw token in a prompt, arg, or history).
+   - Add the returned hash under the env: `tokens = [{ author = "alice@example.com", name = "alice-main", sha256 = "sha256:..." }]`, with `sources = ["token"]` and `token_env = "CFGIT_IDENTITY_TOKEN"`.
+   - At runtime the process must export `CFGIT_IDENTITY_TOKEN='<the raw token>'`. Alternatively use `db_principal` identity (map DB users to authors) when each person already has their own DB credential — often cleaner than tokens.
+4. Set permissions for shared stores: `[env.<name>.permissions] mode = "restricted"`, with `admins`/`writers` author globs and `admin_actions` for system-wide ops. In `open` permission mode anyone the identity layer accepts can write.
+5. Initialize and verify, then first import:
+   - `cfg init` (creates history/heads, and branch refs if `[branches] enabled = true`).
+   - `cfg doctor --status --json` to confirm where you are pointed (config, env, target db, identity mode + whether verified, reachability). It warns if a `needs_approval` env is still in `open` identity mode.
+   - `cfg doctor --json` (read-only) BEFORE the first import — apply its `secret_fields`/`ignore_fields` suggestions to `.cfg.toml` and re-run until `ok`.
+   - `cfg import --all -m "initial import" --json`, then `cfg status --json`.
+6. For a shared store, confirm identity is actually verified before real writes: `cfg whoami --json` → check `identity_mode` and `identity.authenticated`. A display fingerprint like `#abc12` is NOT proof.
+
 ## Workflow
 
 0. Preflight a new config (first import only).
