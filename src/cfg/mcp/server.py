@@ -14,9 +14,28 @@ except ModuleNotFoundError:  # pragma: no cover
     FastMCP = None  # type: ignore[assignment]
 
 
+def _mcp_missing_message() -> str:
+    """Actionable install hint. `cfg-mcp` is commonly launched by an MCP client (e.g. via a
+    one-click deeplink) against a cfgit that was installed WITHOUT the mcp extra. For a pipx
+    install, `pip install cfgit[mcp]` is the wrong fix (it won't touch the pipx venv), so lead
+    with `pipx inject` when we detect we're running from one."""
+    import sys
+
+    base = (
+        "The cfgit MCP server needs the 'mcp' package, which is not installed in this "
+        "environment. cfgit was installed without the [mcp] extra."
+    )
+    if "/pipx/venvs/" in sys.prefix or "/pipx/venvs/" in sys.executable:
+        return (
+            f"{base}\nFix (pipx): pipx inject cfgit 'mcp>=1.0,<2'\n"
+            "or reinstall with the extra: pipx install 'cfgit[mcp]' --force"
+        )
+    return f"{base}\nFix: pip install 'cfgit[mcp]'  (mcp 2.0 is not yet supported; the extra pins mcp<2)"
+
+
 def _mcp() -> Any:
     if FastMCP is None:
-        raise ModuleNotFoundError("install cfgit[mcp] to run the cfgit MCP server")
+        raise ModuleNotFoundError(_mcp_missing_message())
     return FastMCP("cfgit")
 
 

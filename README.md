@@ -332,6 +332,19 @@ Run the MCP server:
 cfg-mcp
 ```
 
+`cfg-mcp` requires the `mcp` extra. If you installed cfgit without it (a plain
+`pip install cfgit` / `pipx install cfgit`), `cfg-mcp` exits with
+`ModuleNotFoundError` — which is what an MCP client (or a one-click install
+deeplink) will surface as a failed connection. Install the extra:
+
+```bash
+pip install 'cfgit[mcp]'            # pip / venv
+pipx inject cfgit 'mcp>=1.0,<2'     # if cfgit was installed via pipx
+```
+
+The extra currently pins `mcp>=1.0,<2` — the cfgit MCP server targets the mcp 1.x
+`FastMCP` API and is not yet ported to mcp 2.0.
+
 ## Record syntax
 
 Records are addressed as:
