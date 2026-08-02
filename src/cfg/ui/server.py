@@ -1768,7 +1768,21 @@ async function after(res,verb){closeModal();
 
 /* wiring */
 $("find").addEventListener("input",e=>{S.q=e.target.value;renderTree();});
-$("refresh").onclick=()=>{const keep=S.sel, prMode=inPrMode(), branchesMode=inBranchesMode();loadState().then(()=>{if(prMode)renderPrWorkspace();else if(branchesMode)renderBranchesWorkspace();else if(keep)selectRecord(keep);});};
+// Reload state from the server but stay on the current tab/record — used by the Refresh
+// button and by auto-refresh so new drift/branches/PRs (created in a terminal or another
+// tab) show up without a manual reload.
+function softRefresh(){const keep=S.sel, prMode=inPrMode(), branchesMode=inBranchesMode();return loadState().then(()=>{if(prMode)renderPrWorkspace();else if(branchesMode)renderBranchesWorkspace();else if(keep)selectRecord(keep);});}
+$("refresh").onclick=()=>softRefresh();
+// Auto-refresh: pick up out-of-band changes without a manual reload. We skip while a modal
+// is open or a diff/impact panel is loading so we never yank the view out from under you.
+function modalOpen(){return $("mbg").classList.contains("show");}
+// Don't auto-refresh while the user is mid-read: a modal is open, or an impact panel /
+// loading spinner is on screen (auto-reloading would wipe an LLM narration result).
+function busy(){return modalOpen()||!!document.querySelector("#diff .impact, #diff .spin");}
+function autoRefresh(){if(document.hidden||busy())return;softRefresh();}
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)autoRefresh();});
+window.addEventListener("focus",autoRefresh);
+setInterval(autoRefresh,15000);
 $("env").addEventListener("change",()=>{S.sel=null;S.open={};loadState();});
 $("branch").addEventListener("change",()=>{renderBranches();const br=selectedBranch();if(inPrMode()){if(br!==defaultBranch())S.prHead=br;renderPrWorkspace();}else if(inBranchesMode()){S.branchView=br;renderBranchesWorkspace();}});
 // Workflow buttons live with their tab: clicking one lands on that tab's screen, then acts.
