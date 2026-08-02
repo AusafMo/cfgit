@@ -19,6 +19,15 @@ the store, records what changed, and refuses to clobber changes it did not recor
   <sub>Production-shaped drift review &nbsp;·&nbsp; narrated whole-system impact &nbsp;·&nbsp; narrated impact scoped to selected policy, eval, and rollout records</sub>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/04-branches.png" alt="Branches workspace with a default runtime branch, a draft branch, and a branch with an open cfgit PR, plus a compare-branches selector" width="48%" />
+  <img src="docs/screenshots/05-pull-request.png" alt="Open cfgit pull request reviewing a policy-rule change on a draft branch with a line-aligned diff and merge action" width="48%" />
+</p>
+
+<p align="center">
+  <sub>Branch workflow over live records &nbsp;·&nbsp; a cfgit pull request with a line-aligned diff, ready to merge as one runtime mutation</sub>
+</p>
+
 ## Why cfgit exists
 
 Many teams keep runtime behavior in live database records: model routing, agent
