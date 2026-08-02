@@ -2,13 +2,14 @@
 """DB-neutral cfgit engine."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 import fnmatch
 import re
 import uuid
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from cfg.adapters.base import ApplyItem, AtomicityUnavailable, NoSuchConfig, StorageAdapter
 from cfg.core.authz import authorize_mutation
@@ -40,6 +41,25 @@ class SecretBlocked(ValueError):
 
 class BranchingDisabled(ValueError):
     """Branch/PR commands require [branches] enabled = true."""
+
+
+_T = TypeVar("_T")
+
+
+def _gather(tasks: list[Callable[[], _T]]) -> list[_T]:
+    """Run independent, blocking adapter reads concurrently and return results in order.
+
+    The status/ref-list path issues several store round-trips with no data dependency on
+    each other (per-collection id distincts, batch heads/records, the history ref list).
+    Run serially they sum one RTT each — the whole residual latency on a remote store
+    (issue #31). pymongo/psycopg release the GIL during network I/O, so a thread pool turns
+    that sum into ~max(single op). Falls back to serial for 0/1 task (no pool overhead).
+    Exceptions propagate (first one wins), preserving the serial behavior on failure.
+    """
+    if len(tasks) <= 1:
+        return [t() for t in tasks]
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as pool:
+        return list(pool.map(lambda t: t(), tasks))
 
 
 class Engine:
@@ -494,10 +514,19 @@ class Engine:
         batch_records = getattr(self.adapter, "get_records", None)
         batch_heads = getattr(self.adapter, "get_heads", None)
         if callable(batch_records) and callable(batch_heads):
-            for collection, record_ids in by_collection.items():
-                for rid, live in batch_records(collection, record_ids).items():
+            # One get_records + one get_heads per collection, all independent — run them
+            # concurrently so their round-trips overlap instead of summing (issue #31).
+            colls = list(by_collection)
+            tasks: list[Callable[[], dict]] = []
+            for collection in colls:
+                ids = by_collection[collection]
+                tasks.append(lambda c=collection, i=ids: batch_records(c, i))
+                tasks.append(lambda c=collection, i=ids: batch_heads(c, i))
+            results = _gather(tasks)
+            for idx, collection in enumerate(colls):
+                for rid, live in results[2 * idx].items():
                     live_by_ref[(collection, rid)] = live
-                for rid, head in batch_heads(collection, record_ids).items():
+                for rid, head in results[2 * idx + 1].items():
                     head_by_ref[(collection, rid)] = head
             return live_by_ref, head_by_ref
 
@@ -1315,19 +1344,27 @@ class Engine:
 
     def _all_refs(self, *, include_history: bool) -> list[RecordRef]:
         refs: set[tuple[str, str]] = set()
-        for coll in self.config.collections:
-            for record_id in self.adapter.list_record_ids(coll.name):
-                refs.add((coll.name, record_id))
+        # The per-collection live-id lookups and the history ref list are independent
+        # round-trips; run them concurrently so they overlap instead of summing (issue #31).
+        colls = [coll.name for coll in self.config.collections]
+        tasks: list[Callable[[], list]] = [
+            lambda c=name: [(c, rid) for rid in self.adapter.list_record_ids(c)] for name in colls
+        ]
+        # Prefer the cheap two-field history ref list; fall back to query_history for adapters
+        # that don't implement it (it materializes every non-doc field of every history row).
+        list_history_refs = getattr(self.adapter, "list_history_refs", None)
         if include_history:
-            # Prefer the cheap two-field ref list; fall back to query_history for adapters
-            # that don't implement it. query_history materializes every non-doc field of
-            # every history row, which is a multi-second hotspot on a remote store.
-            list_history_refs = getattr(self.adapter, "list_history_refs", None)
             if callable(list_history_refs):
-                refs.update(list_history_refs())
+                tasks.append(lambda: list(list_history_refs()))
             else:
-                for row in self.adapter.query_history(limit=None, order="asc", with_doc=False):
-                    refs.add((row["collection"], row["record_id"]))
+                tasks.append(
+                    lambda: [
+                        (row["collection"], row["record_id"])
+                        for row in self.adapter.query_history(limit=None, order="asc", with_doc=False)
+                    ]
+                )
+        for pairs in _gather(tasks):
+            refs.update(pairs)
         return [RecordRef(collection, record_id) for collection, record_id in refs]
 
     def _main_doc(self, ref: RecordRef) -> dict[str, Any] | None:
