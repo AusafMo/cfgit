@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 
 
-pytest.importorskip("mcp")
+# The MCP server needs FastMCP from mcp.server.fastmcp (mcp 1.x). Skip — rather than
+# hard-fail at collection — if mcp is absent or a newer SDK (2.x) relocated FastMCP.
+pytest.importorskip("mcp.server.fastmcp")
 
 
 def test_mcp_identity_hash_returns_envelope() -> None:
