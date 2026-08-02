@@ -14,6 +14,7 @@ from typing import Any
 
 from cfg.adapters.base import (
     AmbiguousConfig,
+    ApplyItem,
     ApplyResult,
     AtomicityReport,
     HistoryEnvMismatch,
@@ -97,6 +98,54 @@ class PostgresAdapter:
         with self.conn.cursor() as cur:
             cur.execute(sql, self._live_params(collection))
             return [str(row["record_id"]) for row in cur.fetchall() if row["record_id"] is not None]
+
+    def get_records(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_record: one runtime query for many ids instead of one per id.
+
+        Raises AmbiguousConfig if any id resolves to more than one live row, matching
+        get_record's single-row guarantee. Ids with no live row are simply absent.
+        """
+        if not record_ids:
+            return {}
+        coll = self.project.collection(collection)
+        ids = list(record_ids)
+        sql = (
+            f"SELECT {_ident(coll.id_field)} AS record_id, doc FROM {_ident(collection)} "
+            f"WHERE {_ident(coll.id_field)} = ANY(%s) AND {self._live_where(collection)}"
+        )
+        params: list[Any] = [ids, *self._live_params(collection)]
+        with self.conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        out: dict[str, dict] = {}
+        for row in rows:
+            rid = str(row["record_id"])
+            if rid in out:
+                raise AmbiguousConfig(f"{collection}:{rid}")
+            out[rid] = dict(row["doc"])
+        return out
+
+    def get_heads(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_head: one history-store query for many ids instead of one per id."""
+        if not record_ids:
+            return {}
+        ids = list(record_ids)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT h.*
+                FROM {self.history_table} h
+                JOIN {self.heads_table} p
+                  ON p.env = h.env
+                 AND p.collection_name = h.collection_name
+                 AND p.record_id = h.record_id
+                 AND p.head_seq = h.seq
+                WHERE p.env = %s AND p.collection_name = %s AND p.record_id = ANY(%s)
+                """,
+                [self.env_name, collection, ids],
+            )
+            rows = cur.fetchall()
+        return {str(row["record_id"]): _history_row(row) for row in rows}
 
     def get_head(self, collection: str, record_id: str) -> dict | None:
         with self.conn.cursor() as cur:
@@ -198,6 +247,9 @@ class PostgresAdapter:
             return [dict(row) for row in cur.fetchall()]
 
     def put_ref(self, doc: dict) -> None:
+        self._put_ref_doc(doc)
+
+    def _put_ref_doc(self, doc: dict) -> None:
         stored = dict(doc)
         stored["env"] = self.env_name
         stored["id"] = str(stored["id"])
@@ -287,6 +339,24 @@ class PostgresAdapter:
                     raise
         raise RuntimeError("unreachable")
 
+    def apply_many(self, *, items: list[ApplyItem], put_refs: list[dict] | None = None) -> list[ApplyResult]:
+        if not items:
+            return []
+        for attempt in range(3):
+            try:
+                return self._apply_many_once(items=items, put_refs=put_refs or [])
+            except psycopg.Error as exc:
+                if attempt >= 2 or getattr(exc, "sqlstate", None) not in {"40001", "40P01"}:
+                    raise
+        raise RuntimeError("unreachable")
+
+    def _apply_many_once(self, *, items: list[ApplyItem], put_refs: list[dict]) -> list[ApplyResult]:
+        with self.conn.transaction():
+            results = [self._apply_item(item) for item in items]
+            for doc in put_refs:
+                self._put_ref_doc(doc)
+        return results
+
     def _apply_once(
         self,
         *,
@@ -299,85 +369,102 @@ class PostgresAdapter:
         make_head: bool,
         seed_missing: bool,
     ) -> ApplyResult:
-        coll_cfg = self.project.collection(collection)
         with self.conn.transaction():
-            with self.conn.cursor() as cur:
+            result = self._apply_item(
+                ApplyItem(
+                    collection=collection,
+                    record_id=record_id,
+                    new_doc=new_doc,
+                    entry=entry,
+                    expected_head_oid=expected_head_oid,
+                    expected_live_oid=expected_live_oid,
+                    make_head=make_head,
+                    seed_missing=seed_missing,
+                )
+            )
+        return result
+
+    def _apply_item(self, item: ApplyItem) -> ApplyResult:
+        collection = item.collection
+        record_id = item.record_id
+        coll_cfg = self.project.collection(collection)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT * FROM {self.heads_table}
+                WHERE env = %s AND collection_name = %s AND record_id = %s
+                FOR UPDATE
+                """,
+                [self.env_name, collection, record_id],
+            )
+            ptr = cur.fetchone()
+            current_head = ptr["head_oid"] if ptr else None
+            if current_head != item.expected_head_oid:
+                raise StaleHead(current_head)
+
+            if item.expected_live_oid is not None:
+                live = self._get_record_for_update(collection, record_id)
+                if live is None:
+                    raise NoSuchConfig(f"{collection}:{record_id}")
+                live_oid = hash_doc(live, coll_cfg)
+                if live_oid != item.expected_live_oid:
+                    raise StaleLive(live_oid)
+
+            seq = int(ptr["head_seq"]) + 1 if ptr else 1
+            entry = dict(item.entry)
+            entry.update(
+                {
+                    "env": self.env_name,
+                    "collection": collection,
+                    "record_id": record_id,
+                    "seq": seq,
+                }
+            )
+            self._insert_history(entry)
+
+            if current_head:
                 cur.execute(
                     f"""
-                    SELECT * FROM {self.heads_table}
-                    WHERE env = %s AND collection_name = %s AND record_id = %s
-                    FOR UPDATE
+                    UPDATE {self.history_table}
+                    SET valid_to = %s
+                    WHERE env = %s
+                      AND collection_name = %s
+                      AND record_id = %s
+                      AND seq = %s
+                      AND valid_to IS NULL
                     """,
-                    [self.env_name, collection, record_id],
+                    [entry["valid_from"], self.env_name, collection, record_id, ptr["head_seq"]],
                 )
-                ptr = cur.fetchone()
-                current_head = ptr["head_oid"] if ptr else None
-                if current_head != expected_head_oid:
-                    raise StaleHead(current_head)
 
-                if expected_live_oid is not None:
-                    live = self._get_record_for_update(collection, record_id)
-                    if live is None:
-                        raise NoSuchConfig(f"{collection}:{record_id}")
-                    live_oid = hash_doc(live, coll_cfg)
-                    if live_oid != expected_live_oid:
-                        raise StaleLive(live_oid)
+            if item.new_doc is not None:
+                if item.seed_missing:
+                    if self._get_record_for_update(collection, record_id) is not None:
+                        raise StaleLive(f"{collection}:{record_id} reappeared before restore")
+                    self._seed_record(collection, record_id, item.new_doc)
+                else:
+                    self._put_record(collection, record_id, item.new_doc)
 
-                seq = int(ptr["head_seq"]) + 1 if ptr else 1
-                entry = dict(entry)
-                entry.update(
-                    {
-                        "env": self.env_name,
-                        "collection": collection,
-                        "record_id": record_id,
-                        "seq": seq,
-                    }
+            if item.make_head:
+                cur.execute(
+                    f"""
+                    INSERT INTO {self.heads_table}
+                        (env, collection_name, record_id, head_oid, head_seq, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (env, collection_name, record_id)
+                    DO UPDATE SET
+                        head_oid = EXCLUDED.head_oid,
+                        head_seq = EXCLUDED.head_seq,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    [
+                        self.env_name,
+                        collection,
+                        record_id,
+                        entry["oid"],
+                        seq,
+                        entry["recorded_at"],
+                    ],
                 )
-                self._insert_history(entry)
-
-                if current_head:
-                    cur.execute(
-                        f"""
-                        UPDATE {self.history_table}
-                        SET valid_to = %s
-                        WHERE env = %s
-                          AND collection_name = %s
-                          AND record_id = %s
-                          AND seq = %s
-                          AND valid_to IS NULL
-                        """,
-                        [entry["valid_from"], self.env_name, collection, record_id, ptr["head_seq"]],
-                    )
-
-                if new_doc is not None:
-                    if seed_missing:
-                        if self._get_record_for_update(collection, record_id) is not None:
-                            raise StaleLive(f"{collection}:{record_id} reappeared before restore")
-                        self._seed_record(collection, record_id, new_doc)
-                    else:
-                        self._put_record(collection, record_id, new_doc)
-
-                if make_head:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {self.heads_table}
-                            (env, collection_name, record_id, head_oid, head_seq, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (env, collection_name, record_id)
-                        DO UPDATE SET
-                            head_oid = EXCLUDED.head_oid,
-                            head_seq = EXCLUDED.head_seq,
-                            updated_at = EXCLUDED.updated_at
-                        """,
-                        [
-                            self.env_name,
-                            collection,
-                            record_id,
-                            entry["oid"],
-                            seq,
-                            entry["recorded_at"],
-                        ],
-                    )
 
         return ApplyResult(
             collection=collection,

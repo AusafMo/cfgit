@@ -25,6 +25,14 @@ or secret-policy failure blocks the whole batch before any record is written.
 If it returns `blocked`, nothing was applied. If it returns `partial`, inspect
 `results`, `failed`, and `pending` before continuing.
 
+For branch review flows, remember that branch commits and PR creation write only
+cfgit refs. `cfg_pr_merge` is the runtime mutation. For multi-record PRs it
+preflights every touched record, requires adapter batch atomicity, and commits or
+rolls back all runtime records, canonical heads/history, and the PR status
+together. If the MCP envelope returns `stale`, `changed_outside_cfgit`, or
+`atomicity_unavailable`, stop and inspect the reported drift, main-head movement,
+or adapter capability before retrying.
+
 ## Agent Identity
 
 In `authenticated` or `enforced` environments, run the agent process with its own
@@ -84,6 +92,17 @@ Tool list:
 - `cfg_impact`
 - `cfg_commit`
 - `cfg_bulk_commit`
+- `cfg_branch_list`
+- `cfg_branch_create`
+- `cfg_branch_delete`
+- `cfg_branch_diff`
+- `cfg_branch_log`
+- `cfg_pr_create`
+- `cfg_pr_list`
+- `cfg_pr_show`
+- `cfg_pr_close`
+- `cfg_pr_merge`
+- `cfg_recent_history`
 - `cfg_log`
 - `cfg_show`
 - `cfg_adopt`

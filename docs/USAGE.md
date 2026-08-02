@@ -240,9 +240,9 @@ cfg pr merge <pr-id>
 
 `cfg pr merge` is the only branch/PR command that mutates runtime. It writes a
 normal canonical history entry with `op = "merge"` and source PR metadata. It
-refuses stale main heads and live drift. In this v1 slice, multi-record PR merge
-is blocked unless the adapter exposes true batch atomicity; split those changes
-into one-record PRs when you need a merge today.
+refuses stale main heads and live drift. Multi-record PR merge requires adapter
+batch atomicity: all runtime records, canonical history/head updates, and the PR
+status update commit together or roll back together.
 
 `cfg switch <branch>` only writes local CLI state under `.cfgit/state.json`.
 It does not change runtime. Agents and scripts should prefer explicit

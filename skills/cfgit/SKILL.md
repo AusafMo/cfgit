@@ -77,7 +77,7 @@ Use cfgit as the safety layer around a live datastore. The app still reads and w
    - `cfg --branch <name> commit <record> --from <file> -m "<message>" --json`
    - `cfg diff main..<name> --json`
    - `cfg pr create --base main --head <name> -m "<message>" --json`
-   - `cfg pr merge <pr-id> --json` only after review. If merge returns `stale` or `changed_outside_cfgit`, do not retry blindly; inspect current main/live drift first.
+   - `cfg pr merge <pr-id> --json` only after review. If merge returns `stale`, `changed_outside_cfgit`, or `atomicity_unavailable`, do not retry blindly; inspect current main/live drift or adapter capability first.
 
 ## MCP Tools
 
@@ -116,4 +116,5 @@ If the cfgit MCP server is available, prefer its tools over shelling out:
 
 Every MCP tool returns the same envelope: `status`, `code`, `message`, `data`, plus top-level `state` and `next`. `state` echoes the outcome's terminal state (e.g. `changed_outside_cfgit`, `noop`, `blocked`, `would_commit`); `next` is a self-teaching remedy `{why, remedy, commands}` when the outcome needs one, else null. Branch on `state` and follow `next.commands` on a refusal instead of guessing.
 For MCP bulk commits, pass `items` as structured JSON (`[{record, doc}]`) when the client supports it; use a JSON string only when the client cannot send nested objects cleanly.
+For MCP PR merges, `cfg_pr_merge` has the same semantics as `cfg pr merge`: it is the only branch/PR mutation path, multi-record merges are batch-atomic when supported, and `atomicity_unavailable` means no runtime records were changed.
 For MCP history/env mismatches, branch on `status="error"` and `code=6`; surface the `message` to the user and do not continue mutation.

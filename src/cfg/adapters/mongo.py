@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlsplit
 
 from cfg.adapters.base import (
     AmbiguousConfig,
+    ApplyItem,
     ApplyResult,
     AtomicityUnavailable,
     AtomicityReport,
@@ -66,6 +67,53 @@ class MongoAdapter:
         coll = self.project.collection(collection)
         values = self.db[collection].distinct(coll.id_field, coll.live_when)
         return sorted(str(v) for v in values if v is not None)
+
+    def get_records(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_record: one runtime query for many ids instead of one per id.
+
+        Raises AmbiguousConfig if any id resolves to more than one live doc, matching
+        get_record's single-doc guarantee. Ids with no live doc are simply absent.
+        """
+        if not record_ids:
+            return {}
+        coll = self.project.collection(collection)
+        query = {coll.id_field: {"$in": list(record_ids)}, **coll.live_when}
+        out: dict[str, dict] = {}
+        for doc in self.db[collection].find(query):
+            rid = str(doc.get(coll.id_field))
+            if rid in out:
+                raise AmbiguousConfig(f"{collection}:{rid}")
+            out[rid] = doc
+        return out
+
+    def get_heads(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_head: two history-store queries total (head pointers, then the
+        pointed-to history rows) instead of two per id."""
+        if not record_ids:
+            return {}
+        ids = list(record_ids)
+        ptrs = list(
+            self.heads.find(
+                {"env": self.env_name, "collection": collection, "record_id": {"$in": ids}}
+            )
+        )
+        if not ptrs:
+            return {}
+        want = {str(p["record_id"]): p["head_seq"] for p in ptrs}
+        rows = self.history.find(
+            {
+                "env": self.env_name,
+                "collection": collection,
+                "record_id": {"$in": list(want)},
+                "seq": {"$in": sorted(set(want.values()))},
+            }
+        )
+        out: dict[str, dict] = {}
+        for row in rows:
+            rid = str(row["record_id"])
+            if want.get(rid) == row["seq"]:
+                out[rid] = _history_row(row, with_doc=True)
+        return out
 
     def get_head(self, collection: str, record_id: str) -> dict | None:
         ptr = self.heads.find_one(self._head_query(collection, record_id))
@@ -138,6 +186,9 @@ class MongoAdapter:
         return [{"tag": row["_id"], "count": row["count"]} for row in self.history.aggregate(pipeline)]
 
     def put_ref(self, doc: dict) -> None:
+        self._put_ref(doc)
+
+    def _put_ref(self, doc: dict, *, session: ClientSession | None = None) -> None:
         stored = deepcopy(doc)
         stored["env"] = self.env_name
         ref_type = str(stored["type"])
@@ -146,6 +197,7 @@ class MongoAdapter:
             {"env": self.env_name, "type": ref_type, "id": ref_id},
             stored,
             upsert=True,
+            session=session,
         )
 
     def get_ref(self, ref_type: str, ref_id: str) -> dict | None:
@@ -193,6 +245,28 @@ class MongoAdapter:
                     raise
         raise RuntimeError("unreachable")
 
+    def apply_many(self, *, items: list[ApplyItem], put_refs: list[dict] | None = None) -> list[ApplyResult]:
+        atomicity = self.check_atomicity_scope()
+        if not atomicity.atomic:
+            raise AtomicityUnavailable(atomicity.reason)
+        if not items:
+            return []
+        for attempt in range(3):
+            try:
+                return self._apply_many_once(items=items, put_refs=put_refs or [])
+            except OperationFailure as exc:
+                if attempt >= 2 or not _is_transient_transaction_error(exc):
+                    raise
+        raise RuntimeError("unreachable")
+
+    def _apply_many_once(self, *, items: list[ApplyItem], put_refs: list[dict]) -> list[ApplyResult]:
+        with self.client.start_session() as session:
+            with session.start_transaction():
+                results = [self._apply_item(item, session=session) for item in items]
+                for doc in put_refs:
+                    self._put_ref(doc, session=session)
+        return results
+
     def _apply_once(
         self,
         *,
@@ -205,82 +279,100 @@ class MongoAdapter:
         make_head: bool,
         seed_missing: bool,
     ) -> ApplyResult:
-        coll_cfg = self.project.collection(collection)
         with self.client.start_session() as session:
             with session.start_transaction():
-                ptr = self.heads.find_one(self._head_query(collection, record_id), session=session)
-                current_head = ptr.get("head_oid") if ptr else None
-                if current_head != expected_head_oid:
-                    raise StaleHead(current_head)
+                result = self._apply_item(
+                    ApplyItem(
+                        collection=collection,
+                        record_id=record_id,
+                        new_doc=new_doc,
+                        entry=entry,
+                        expected_head_oid=expected_head_oid,
+                        expected_live_oid=expected_live_oid,
+                        make_head=make_head,
+                        seed_missing=seed_missing,
+                    ),
+                    session=session,
+                )
+        return result
 
-                if expected_live_oid is not None:
-                    live = self._get_record(collection, record_id, session=session)
-                    if live is None:
-                        raise NoSuchConfig(f"{collection}:{record_id}")
-                    live_oid = hash_doc(live, coll_cfg)
-                    if live_oid != expected_live_oid:
-                        raise StaleLive(live_oid)
+    def _apply_item(self, item: ApplyItem, *, session: ClientSession) -> ApplyResult:
+        collection = item.collection
+        record_id = item.record_id
+        coll_cfg = self.project.collection(collection)
+        ptr = self.heads.find_one(self._head_query(collection, record_id), session=session)
+        current_head = ptr.get("head_oid") if ptr else None
+        if current_head != item.expected_head_oid:
+            raise StaleHead(current_head)
 
-                seq = int(ptr.get("head_seq", 0)) + 1 if ptr else 1
-                entry = dict(entry)
-                entry.update(
-                    {
+        if item.expected_live_oid is not None:
+            live = self._get_record(collection, record_id, session=session)
+            if live is None:
+                raise NoSuchConfig(f"{collection}:{record_id}")
+            live_oid = hash_doc(live, coll_cfg)
+            if live_oid != item.expected_live_oid:
+                raise StaleLive(live_oid)
+
+        seq = int(ptr.get("head_seq", 0)) + 1 if ptr else 1
+        entry = dict(item.entry)
+        entry.update(
+            {
+                "env": self.env_name,
+                "collection": collection,
+                "record_id": record_id,
+                "seq": seq,
+            }
+        )
+        self.history.insert_one(entry, session=session)
+
+        if current_head:
+            self.history.update_one(
+                {
+                    "env": self.env_name,
+                    "collection": collection,
+                    "record_id": record_id,
+                    "seq": ptr["head_seq"],
+                    "valid_to": None,
+                },
+                {"$set": {"valid_to": entry["valid_from"]}},
+                session=session,
+            )
+
+        if item.new_doc is not None:
+            if item.seed_missing:
+                if self._get_record(collection, record_id, session=session) is not None:
+                    raise StaleLive(f"{collection}:{record_id} reappeared before restore")
+                self._seed_record(collection, record_id, item.new_doc, session=session)
+            else:
+                self._put_record(collection, record_id, item.new_doc, session=session)
+
+        if item.make_head:
+            head_filter = self._head_query(collection, record_id)
+            if ptr:
+                head_filter = {
+                    **head_filter,
+                    "head_oid": item.expected_head_oid,
+                    "head_seq": ptr["head_seq"],
+                }
+            result = self.heads.update_one(
+                head_filter,
+                {
+                    "$set": {
+                        "head_oid": entry["oid"],
+                        "head_seq": seq,
+                        "updated_at": entry["recorded_at"],
+                    },
+                    "$setOnInsert": {
                         "env": self.env_name,
                         "collection": collection,
                         "record_id": record_id,
-                        "seq": seq,
-                    }
-                )
-                self.history.insert_one(entry, session=session)
-
-                if current_head:
-                    self.history.update_one(
-                        {
-                            "env": self.env_name,
-                            "collection": collection,
-                            "record_id": record_id,
-                            "seq": ptr["head_seq"],
-                            "valid_to": None,
-                        },
-                        {"$set": {"valid_to": entry["valid_from"]}},
-                        session=session,
-                    )
-
-                if new_doc is not None:
-                    if seed_missing:
-                        if self._get_record(collection, record_id, session=session) is not None:
-                            raise StaleLive(f"{collection}:{record_id} reappeared before restore")
-                        self._seed_record(collection, record_id, new_doc, session=session)
-                    else:
-                        self._put_record(collection, record_id, new_doc, session=session)
-
-                if make_head:
-                    head_filter = self._head_query(collection, record_id)
-                    if ptr:
-                        head_filter = {
-                            **head_filter,
-                            "head_oid": expected_head_oid,
-                            "head_seq": ptr["head_seq"],
-                        }
-                    result = self.heads.update_one(
-                        head_filter,
-                        {
-                            "$set": {
-                                "head_oid": entry["oid"],
-                                "head_seq": seq,
-                                "updated_at": entry["recorded_at"],
-                            },
-                            "$setOnInsert": {
-                                "env": self.env_name,
-                                "collection": collection,
-                                "record_id": record_id,
-                            },
-                        },
-                        upsert=not ptr,
-                        session=session,
-                    )
-                    if ptr and result.matched_count != 1:
-                        raise StaleHead(expected_head_oid)
+                    },
+                },
+                upsert=not ptr,
+                session=session,
+            )
+            if ptr and result.matched_count != 1:
+                raise StaleHead(item.expected_head_oid)
 
         return ApplyResult(
             collection=collection,

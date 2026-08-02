@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 
 
-pytest.importorskip("mcp")
+# The MCP server needs FastMCP from mcp.server.fastmcp (mcp 1.x). Skip — rather than
+# hard-fail at collection — if mcp is absent or a newer SDK (2.x) relocated FastMCP.
+pytest.importorskip("mcp.server.fastmcp")
 
 
 def test_mcp_identity_hash_returns_envelope() -> None:
@@ -73,7 +75,7 @@ def test_mcp_branch_and_pr_tools_forward_payloads(monkeypatch: pytest.MonkeyPatc
     assert captured[0]["payload"] == {"name": "router-test", "from_branch": "main", "message": "draft"}
     assert captured[1]["payload"]["branch"] == "router-test"
     assert captured[2]["payload"]["head"] == "router-test"
-    assert captured[3]["payload"]["id"] == "pr_abc"
+    assert captured[3]["payload"] == {"id": "pr_abc", "message": "merge draft"}
 
 
 def test_mcp_recent_history_forwards_limit(monkeypatch: pytest.MonkeyPatch) -> None:

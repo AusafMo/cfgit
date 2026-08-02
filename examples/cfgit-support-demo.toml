@@ -83,8 +83,17 @@ from = "git"
 
 [connections]
 enabled = true
-share_with_ai = []
-ai_provider = "openai"
+# Demo data is synthetic and safe (see examples/seed_support_demo.py). We opt these
+# records into AI narration so `cfg impact --llm` can explain the refund_resolution
+# change and its scoped blast radius (used for the README screenshots).
+share_with_ai = [
+  "agent_configs:refund_resolution",
+  "policy_rules:refund_window_standard",
+  "eval_suites:refund_policy_regression",
+  "rollout_controls:refund_agent_june",
+  "routing_policies:global_support_router",
+]
+ai_provider = "gemini"
 warn_level = "none"
 links = [
   { field = "agent", means = "agent identifier" },

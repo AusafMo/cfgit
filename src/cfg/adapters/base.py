@@ -50,6 +50,18 @@ class ApplyResult:
 
 
 @dataclass
+class ApplyItem:
+    collection: str
+    record_id: str
+    new_doc: dict | None
+    entry: dict
+    expected_head_oid: str | None
+    expected_live_oid: str | None = None
+    make_head: bool = True
+    seed_missing: bool = False
+
+
+@dataclass
 class ReconcileReport:
     rolled_forward: list[str]
     rolled_back: list[str]
@@ -88,6 +100,14 @@ class StorageAdapter(Protocol):
     def seed_record(self, collection: str, record_id: str, doc: dict) -> None: ...
     def list_record_ids(self, collection: str) -> list[str]: ...
 
+    # OPTIONAL batch reads. Callers (e.g. Engine.status) feature-detect these and
+    # fall back to per-record get_record/get_head when an adapter does not provide
+    # them, so third-party adapters that omit them keep working. Implementing them
+    # collapses the per-record N+1 (2 round-trips per record) into ~2 queries per
+    # collection — the difference between a snappy and a stalling UI on a remote DB.
+    def get_records(self, collection: str, record_ids: list[str]) -> dict[str, dict]: ...
+    def get_heads(self, collection: str, record_ids: list[str]) -> dict[str, dict]: ...
+
     # history reads
     def get_head(self, collection: str, record_id: str) -> dict | None: ...
     def query_history(self, *, collection: str | None = None, record_id: str | None = None,
@@ -108,6 +128,7 @@ class StorageAdapter(Protocol):
     def apply(self, *, collection: str, record_id: str, new_doc: dict | None, entry: dict,
               expected_head_oid: str | None, expected_live_oid: str | None = None,
               make_head: bool = True, seed_missing: bool = False) -> ApplyResult: ...
+    def apply_many(self, *, items: list[ApplyItem], put_refs: list[dict] | None = None) -> list[ApplyResult]: ...
 
     # labels
     def add_tag(self, *, collection: str, record_id: str, seq: int, tag: str) -> None: ...
