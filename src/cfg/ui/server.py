@@ -620,6 +620,9 @@ UI_HTML = r"""<!doctype html>
     .docbody{padding:14px 16px;white-space:pre-wrap;word-break:break-word;line-height:1.6;max-height:none}
 
     .spin{padding:30px;color:var(--faint);font-size:13px;text-align:center}
+    .spinner{display:inline-block;width:11px;height:11px;margin-right:6px;vertical-align:-1px;
+      border:2px solid var(--edge2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
     .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(8px);background:var(--panel2);
       border:1px solid var(--edge2);border-radius:10px;padding:10px 18px;font-size:13px;z-index:60;
       box-shadow:var(--shadow);opacity:0;transition:all .18s;pointer-events:none;display:flex;align-items:center;gap:9px}
@@ -1219,15 +1222,20 @@ async function showDrift(rec){
   $("diff").innerHTML=`<div class="spin">computing diff…</div>`;
   const res=await api("diff",{record:S.sel,a:"=HEAD",b:"=live"});
   renderDiff(res,"recorded","live",S.diffCtx.empty);
-  $("aImpact").onclick=()=>showImpact();
+  // The top button adds LLM narration on demand; the deterministic panel is shown by default below.
+  $("aImpact").onclick=()=>showImpact({llm:true});
   $("aAdopt").onclick=()=>openAdopt(rec);
   refreshImpactBtn();
+  showImpact();  // auto-show the deterministic system-impact panel (no LLM call)
 }
-async function showImpact(){
+async function showImpact(opts){
   if(!S.diffCtx)return;
+  const useLlm=!!(opts&&opts.llm);  // deterministic by default; LLM narration only on request
   const against=[...S.against].filter(k=>k!==S.sel);
-  const btn=$("aImpact"); if(btn){btn.disabled=true;btn.textContent="Analyzing…";}
-  const payload={record:S.sel,a:S.diffCtx.a,b:S.diffCtx.b,use_llm:true};
+  const btn=$("aImpact"); if(btn){btn.disabled=true;btn.innerHTML=`<span class="spinner"></span>${useLlm?"Narrating…":"Analyzing…"}`;}
+  // The narration call takes a few seconds; give the clicked in-panel button its own busy state.
+  const busyBtn=$("aNarrate"); if(busyBtn){busyBtn.disabled=true;busyBtn.innerHTML=`<span class="spinner"></span>Narrating…`;}
+  const payload={record:S.sel,a:S.diffCtx.a,b:S.diffCtx.b,use_llm:useLlm};
   if(S.impact&&S.impact.provider)payload.provider=S.impact.provider;
   if(S.impact&&S.impact.model)payload.model=S.impact.model;
   if(against.length)payload.against=against;
@@ -1257,6 +1265,11 @@ async function showImpact(){
     if(ov.unknowns&&(Array.isArray(ov.unknowns)?ov.unknowns.length:true))parts.push(`<div class="lk"><span class="lkk">unknowns</span>${asList(ov.unknowns)}</div>`);
     const fallback=(!parts.length&&(llm.text||llm.narration))?`<div class="body">${esc(llm.text||llm.narration)}</div>`:"";
     llmHtml=`<div class="llm"><div class="who">${esc(llm.provider||"llm")} · ${esc(llm.model||"")} narration</div>${parts.join("")||fallback||`<div class="off">no narration returned</div>`}</div>`;
+  } else if(!useLlm){
+    // deterministic-only run (the default): the impact above is computed locally. Narration
+    // is opt-in and DOES send the record diff to the configured provider — say so plainly.
+    const prov=(S.impact&&S.impact.provider)?esc(S.impact.provider):"the configured provider";
+    llmHtml=`<div class="llm"><div class="who">LLM narration</div><div class="off">The impact above is computed locally. Narration sends this record's diff to ${prov}. <button class="btn" id="aNarrate" style="margin-left:6px">Narrate with LLM</button></div></div>`;
   } else {
     llmHtml=`<div class="llm"><div class="who">LLM narration</div><div class="off">off — enable <span class="mono">[connections]</span> in .cfg.toml for a written explanation of what this change does to the system. Everything above is computed locally, no data leaves your machine.</div></div>`;
   }
@@ -1280,6 +1293,7 @@ async function showImpact(){
   const wrap=$("diff");
   const existing=wrap.querySelector(".impact"); if(existing)existing.remove();
   wrap.insertAdjacentHTML("afterbegin",panel);
+  const nb=$("aNarrate"); if(nb)nb.onclick=()=>showImpact({llm:true});
 }
 async function selectNode(e){
   if(!e)return;markNode(e.seq,false);
@@ -1296,7 +1310,7 @@ async function selectNode(e){
     const res=await api("diff",{record:S.sel,a:"@"+parent.seq,b:"@"+e.seq});
     renderDiff(res,"@"+parent.seq,"@"+e.seq,"No field-level change from the parent version.");}
   else{S.diffCtx=null;const res=await api("show",{record:S.sel,ref:"@"+e.seq});renderDoc(res);}
-  const ib=$("aImpact");if(ib)ib.onclick=()=>showImpact();
+  const ib=$("aImpact");if(ib)ib.onclick=()=>showImpact({llm:true});
   const rb=$("aRestore");if(rb)rb.onclick=()=>openRestore(S.records.find(r=>r.collection+":"+r.record_id===S.sel),"@"+e.seq);
   refreshImpactBtn();
 }
