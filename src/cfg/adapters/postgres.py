@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import re
+import threading
 from typing import Any
 
 from cfg.adapters.base import (
@@ -38,6 +39,25 @@ except ModuleNotFoundError as exc:  # pragma: no cover
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+# A psycopg connection is stateful and NOT safe to share across threads (unlike a
+# thread-safe MongoClient). The UI builds an adapter per request on a threading server,
+# so we cache one connection per (thread, URI): each thread reuses its own connection
+# across requests — reclaiming the ~seconds-long TLS connect — without cross-thread sharing.
+_CONN_CACHE = threading.local()
+
+
+def _conn_for(uri: str) -> "psycopg.Connection":
+    cache = getattr(_CONN_CACHE, "by_uri", None)
+    if cache is None:
+        cache = {}
+        _CONN_CACHE.by_uri = cache
+    conn = cache.get(uri)
+    if conn is None or conn.closed:
+        conn = psycopg.connect(uri, autocommit=True, row_factory=dict_row)
+        cache[uri] = conn
+    return conn
+
+
 class PostgresAdapter:
     def __init__(self, *, project: ProjectConfig, env_name: str):
         env = project.envs[env_name]
@@ -45,7 +65,7 @@ class PostgresAdapter:
             raise ValueError(f"missing Postgres URI for env {env_name}")
         self.project = project
         self.env_name = env_name
-        self.conn = psycopg.connect(env.uri, autocommit=True, row_factory=dict_row)
+        self.conn = _conn_for(env.uri)
         self.history_table_name = project.history.history_collection
         self.heads_table_name = project.history.heads_collection
         self.refs_table_name = project.branches.refs_collection
@@ -147,6 +167,17 @@ class PostgresAdapter:
             rows = cur.fetchall()
         return {str(row["record_id"]): _history_row(row) for row in rows}
 
+    def list_history_refs(self) -> list[tuple[str, str]]:
+        """Distinct (collection, record_id) pairs that have history — cheap two-column
+        scan for Engine._all_refs instead of materializing full rows via query_history."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT collection_name, record_id FROM {self.history_table} "
+                f"WHERE env = %s ORDER BY collection_name, record_id",
+                [self.env_name],
+            )
+            return [(str(row["collection_name"]), str(row["record_id"])) for row in cur.fetchall()]
+
     def get_head(self, collection: str, record_id: str) -> dict | None:
         with self.conn.cursor() as cur:
             cur.execute(
@@ -211,8 +242,12 @@ class PostgresAdapter:
                 add_clause("oid LIKE %s", f"{oid}%")
 
         direction = "DESC" if order == "desc" else "ASC"
+        # Select only the columns _history_row reads, and pull the large `doc` jsonb only
+        # when the caller asked for it — SELECT * shipped doc on every with_doc=False call
+        # (e.g. _all_refs, log listing), which is wasted transfer on a remote store.
+        cols = _HISTORY_COLUMNS + (", doc" if with_doc else "")
         sql = (
-            f"SELECT * FROM {self.history_table} "
+            f"SELECT {cols} FROM {self.history_table} "
             f"WHERE {' AND '.join(clauses)} "
             f"ORDER BY collection_name ASC, record_id ASC, seq {direction}"
         )
@@ -777,6 +812,13 @@ class PostgresAdapter:
                     other_envs=other_envs,
                 )
             )
+
+
+# Columns _history_row reads (everything except the large `doc` jsonb, added on demand).
+_HISTORY_COLUMNS = (
+    "env, collection_name, record_id, seq, oid, parent_oid, message, author, "
+    "recorded_at, valid_from, valid_to, valid_from_estimated, op, git_shas, tags, meta"
+)
 
 
 def _history_row(row: dict[str, Any], *, with_doc: bool = True) -> dict[str, Any]:

@@ -31,6 +31,20 @@ except ModuleNotFoundError as exc:  # pragma: no cover
     raise ModuleNotFoundError("install cfgit[mongo] to use MongoAdapter") from exc
 
 
+# MongoClient is thread-safe and connection-pooled by design, so one per URI can be shared
+# across engines. A fresh client pays a full TLS+SRV handshake (~2s on Atlas); the UI builds
+# an engine per request, so without this cache every /api/state re-handshakes. Keyed by URI.
+_CLIENT_CACHE: dict[str, "MongoClient"] = {}
+
+
+def _client_for(uri: str) -> "MongoClient":
+    client = _CLIENT_CACHE.get(uri)
+    if client is None:
+        client = MongoClient(uri)
+        _CLIENT_CACHE[uri] = client
+    return client
+
+
 class MongoAdapter:
     def __init__(self, *, project: ProjectConfig, env_name: str):
         env = project.envs[env_name]
@@ -42,9 +56,9 @@ class MongoAdapter:
         self.history_uri = env.history_uri or env.uri
         self.runtime_db_name = env.runtime_db or env.db
         self.history_db_name = env.history_db or env.db
-        self.client = MongoClient(self.history_uri)
+        self.client = _client_for(self.history_uri)
         self.history_client = self.client
-        self.runtime_client = self.client if self.runtime_uri == self.history_uri else MongoClient(self.runtime_uri)
+        self.runtime_client = self.client if self.runtime_uri == self.history_uri else _client_for(self.runtime_uri)
         self.db = self.runtime_client[self.runtime_db_name]
         self.history_db = self.history_client[self.history_db_name]
         self.history = self.history_db[project.history.history_collection]
@@ -114,6 +128,18 @@ class MongoAdapter:
             if want.get(rid) == row["seq"]:
                 out[rid] = _history_row(row, with_doc=True)
         return out
+
+    def list_history_refs(self) -> list[tuple[str, str]]:
+        """Distinct (collection, record_id) pairs that have history, projected to just
+        those two fields — no doc, no per-row object churn. Feeds Engine._all_refs cheaply
+        (~160ms vs ~5s of pulling full rows on a remote store)."""
+        cursor = self.history.find(
+            {"env": self.env_name}, {"collection": 1, "record_id": 1, "_id": 0}
+        )
+        seen: set[tuple[str, str]] = set()
+        for row in cursor:
+            seen.add((str(row["collection"]), str(row["record_id"])))
+        return sorted(seen)
 
     def get_head(self, collection: str, record_id: str) -> dict | None:
         ptr = self.heads.find_one(self._head_query(collection, record_id))

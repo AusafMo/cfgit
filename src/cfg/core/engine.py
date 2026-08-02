@@ -552,12 +552,13 @@ class Engine:
         untracked), so the snapshot records exactly which version it represents. Writes nothing.
         """
         refs = [ref] if ref else self._all_refs(include_history=False)
+        live_by_ref, head_by_ref = self._batch_live_and_heads(refs)
         items: list[dict[str, Any]] = []
         for item in sorted(refs, key=lambda r: (r.collection, r.record_id)):
-            live = self.adapter.get_record(item.collection, item.record_id)
+            live = live_by_ref.get((item.collection, item.record_id))
             if live is None:
                 continue
-            head = self.adapter.get_head(item.collection, item.record_id)
+            head = head_by_ref.get((item.collection, item.record_id))
             items.append(
                 {
                     "record": f"{item.collection}:{item.record_id}",
@@ -583,9 +584,10 @@ class Engine:
         secret_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
         large_groups: dict[tuple[str, str], dict[str, Any]] = {}
         invariant_violations = self.adapter.check_runtime_invariant(ref.collection if ref else None)
+        live_by_ref, _ = self._batch_live_and_heads(refs)
         scanned = 0
         for item in refs:
-            live = self.adapter.get_record(item.collection, item.record_id)
+            live = live_by_ref.get((item.collection, item.record_id))
             if live is None:
                 continue
             scanned += 1
@@ -1317,8 +1319,15 @@ class Engine:
             for record_id in self.adapter.list_record_ids(coll.name):
                 refs.add((coll.name, record_id))
         if include_history:
-            for row in self.adapter.query_history(limit=None, order="asc", with_doc=False):
-                refs.add((row["collection"], row["record_id"]))
+            # Prefer the cheap two-field ref list; fall back to query_history for adapters
+            # that don't implement it. query_history materializes every non-doc field of
+            # every history row, which is a multi-second hotspot on a remote store.
+            list_history_refs = getattr(self.adapter, "list_history_refs", None)
+            if callable(list_history_refs):
+                refs.update(list_history_refs())
+            else:
+                for row in self.adapter.query_history(limit=None, order="asc", with_doc=False):
+                    refs.add((row["collection"], row["record_id"]))
         return [RecordRef(collection, record_id) for collection, record_id in refs]
 
     def _main_doc(self, ref: RecordRef) -> dict[str, Any] | None:
