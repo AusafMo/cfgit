@@ -266,6 +266,11 @@ UI_HTML = r"""<!doctype html>
       --disp:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;
       --body:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
       --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      /* dashed drift ring, drawn as an SVG stroke so the dashes divide the circumference
+         evenly (a CSS dashed border bunches them to one side, and too many small dashes read
+         as a fuzzy dotted ring). Used as a mask; color comes from --amber. 5 clean dashes:
+         (4.0 dash + 2.28 gap) x5 ~= circumference 2*pi*5 = 31.4. */
+      --drift-ring:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 13 13"><circle cx="6.5" cy="6.5" r="5" fill="none" stroke="black" stroke-width="1.8" stroke-dasharray="4.0 2.28" stroke-linecap="butt"/></svg>');
     }
     /* DARK: deep slate, never pure black; calm on the eyes.
        Accent is monochrome (ink) + a single restrained GitHub green for primary actions. */
@@ -479,7 +484,8 @@ UI_HTML = r"""<!doctype html>
     .node.sel{background:var(--panel2)}
     .node.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
     /* graph rail: vertical line + node markers */
-    .node .line{position:absolute;left:21px;top:0;bottom:0;width:2px;background:var(--edge2)}
+    /* line center (20.5 + 2/2 = 21.5) is aligned to the marker center (15 + 13/2 = 21.5). */
+    .node .line{position:absolute;left:20.5px;top:0;bottom:0;width:2px;background:var(--edge2)}
     .node:first-child .line{top:20px}
     .node:last-child .line{bottom:calc(100% - 20px)}
     .node .mk{position:absolute;left:15px;top:14px;width:13px;height:13px;border-radius:50%;
@@ -488,10 +494,16 @@ UI_HTML = r"""<!doctype html>
     .node.restore .mk{border-color:var(--sky)}
     .node.adopt .mk{border-color:var(--moss)}
     .node.importt .mk{border-color:var(--faint)}
-    /* drift = open dashed ring in amber. Same size/position as the committed marker so it
-       aligns on the rail; opaque base fill (pane bg) + amber tint so the rail can't show
-       through the translucent center. */
-    .node.live .mk{border:2px dashed var(--amber);background:linear-gradient(var(--amber-bg),var(--amber-bg)),var(--panel);z-index:2;animation:pulse 2.4s ease-in-out infinite}
+    /* drift = open dashed ring in amber. A CSS `border:dashed` renders its dashes from a
+       fixed origin, so they bunch to one side and the ring reads as off-center. Instead we
+       draw the ring as an SVG stroke whose dash pattern divides the circumference evenly
+       (perfectly symmetric), applied as a mask so it still respects the theme amber var.
+       An opaque base fill (pane bg + amber tint) keeps the timeline rail from showing through. */
+    .node.live .mk{border:0;z-index:2;background:linear-gradient(var(--amber-bg),var(--amber-bg)),var(--panel);
+      animation:pulse 2.4s ease-in-out infinite}
+    .node.live .mk::after{content:"";position:absolute;inset:0;background:var(--amber);
+      -webkit-mask:var(--drift-ring) center/contain no-repeat;mask:var(--drift-ring) center/contain no-repeat}
+
     @keyframes pulse{0%,100%{box-shadow:0 0 0 0 var(--amber-bg)}50%{box-shadow:0 0 0 5px transparent}}
     .node .msg{font-size:13px;line-height:1.4;margin-bottom:4px}
     .node.live .msg{color:var(--amber);font-weight:500}
