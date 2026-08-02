@@ -400,6 +400,12 @@ UI_HTML = r"""<!doctype html>
     .app.branches-mode .records-pane{display:none}
     .app.branches-mode .diff-pane{display:none}
     .app.branches-mode .history-pane{border-right:0}
+    /* Branch/PR workflow buttons belong to their tab: hidden by default (Records/Activity),
+       shown only when their tab's screen is active. */
+    .cmd-branches,.cmd-pr{display:none}
+    .app.branches-mode .cmd-branches{display:inline-flex}
+    .app.pr-mode .cmd-pr{display:inline-flex}
+    .app.branches-mode .cmdset,.app.pr-mode .cmdset{padding-left:0}
     .ph{display:flex;align-items:center;gap:9px;height:42px;padding:0 14px;flex:0 0 auto;
       border-bottom:1px solid var(--edge);background:var(--chrome)}
     .ph .lab{font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
@@ -792,11 +798,11 @@ UI_HTML = r"""<!doctype html>
             <span class="branch-state" id="branchState"></span>
           </div>
           <div class="cmdset" aria-label="Branch workflow">
-            <button class="ghost" id="branchDiff" type="button" title="Compare current branch with main">Compare</button>
-            <button class="ghost" id="newBranch" type="button" title="Create a draft branch">New branch</button>
-            <button class="ghost" id="draftCommit" type="button" title="Commit selected record to the current branch">Commit draft</button>
-            <button class="ghost" id="openPr" type="button" title="Prepare a cfgit PR for the current branch">Prepare PR</button>
-            <button class="ghost" id="mergePr" type="button" title="Merge the open cfgit PR">Merge PR</button>
+            <button class="ghost cmd-branches" id="branchDiff" type="button" title="Compare current branch with main">Compare</button>
+            <button class="ghost cmd-branches" id="newBranch" type="button" title="Create a draft branch">New branch</button>
+            <button class="ghost cmd-branches" id="draftCommit" type="button" title="Commit selected record to the current branch">Commit draft</button>
+            <button class="ghost cmd-pr" id="openPr" type="button" title="Prepare a cfgit PR for the current branch">Prepare PR</button>
+            <button class="ghost cmd-pr" id="mergePr" type="button" title="Merge the open cfgit PR">Merge PR</button>
           </div>
           <button class="ghost" id="refresh" type="button" title="Reload state">Refresh</button>
           <div class="seg" id="theme" aria-label="Theme"><button data-th="dark" class="on">Dark</button><button data-th="light">Light</button></div>
@@ -1761,11 +1767,14 @@ $("find").addEventListener("input",e=>{S.q=e.target.value;renderTree();});
 $("refresh").onclick=()=>{const keep=S.sel, prMode=inPrMode(), branchesMode=inBranchesMode();loadState().then(()=>{if(prMode)renderPrWorkspace();else if(branchesMode)renderBranchesWorkspace();else if(keep)selectRecord(keep);});};
 $("env").addEventListener("change",()=>{S.sel=null;S.open={};loadState();});
 $("branch").addEventListener("change",()=>{renderBranches();const br=selectedBranch();if(inPrMode()){if(br!==defaultBranch())S.prHead=br;renderPrWorkspace();}else if(inBranchesMode()){S.branchView=br;renderBranchesWorkspace();}});
-$("newBranch").onclick=()=>openCreateBranch();
-$("draftCommit").onclick=()=>openDraftCommit();
-$("branchDiff").onclick=()=>showBranchDiff();
-$("openPr").onclick=()=>openPrModal();
-$("mergePr").onclick=()=>openMergeModal();
+// Workflow buttons live with their tab: clicking one lands on that tab's screen, then acts.
+function onBranchesTab(fn){if(!inBranchesMode())renderBranchesWorkspace();fn();}
+function onPrTab(fn){if(!inPrMode())renderPrWorkspace();fn();}
+$("newBranch").onclick=()=>onBranchesTab(openCreateBranch);
+$("draftCommit").onclick=()=>onBranchesTab(openDraftCommit);
+$("branchDiff").onclick=()=>onBranchesTab(showBranchDiff);
+$("openPr").onclick=()=>onPrTab(openPrModal);
+$("mergePr").onclick=()=>onPrTab(openMergeModal);
 $("navRecordsTab").onclick=()=>{setNav("navRecordsTab");if(!S.sel){$("histCt").textContent="";$("hist").innerHTML=`<div class="ghost-pane"><div class="big">No record selected</div>Pick a record on the left to walk its history.</div>`;$("dTitle").textContent="Diff";$("dActs").innerHTML="";$("diff").innerHTML=`<div class="ghost-pane">A version or a record's drift will render here, recorded against live.</div>`;}$("find").focus();};
 $("navBranches").onclick=()=>renderBranchesWorkspace();
 $("navHistoryTab").onclick=()=>{S.sel=null;renderTree();renderRecentHistory();};
