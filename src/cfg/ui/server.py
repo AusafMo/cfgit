@@ -968,7 +968,7 @@ document.addEventListener("click",e=>{if(!e.target.closest(".selectbox"))closeSe
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSelectMenus();});
 syncSelectMenus();
 
-async function loadState(){
+async function loadState(isRefresh){
   const st=await fetch("/api/state?"+qs()).then(r=>r.json()).catch(e=>({error:String(e)}));
   if(st.data&&st.data.whoami){const w=st.data.whoami;S.who=w;const id=w.identity||{};
     const disp=w.identity_display||w.author||"";
@@ -995,7 +995,10 @@ async function loadState(){
   if(Object.keys(S.open).length===0){colls.forEach(c=>{S.open[c]=S.records.some(r=>r.collection===c&&isDrift(r.state));});
     if(!Object.values(S.open).some(Boolean)&&colls[0])S.open[colls[0]]=true;}
   renderFilters();renderTree();
-  if(!S.sel&&!document.querySelector(".app")?.classList.contains("pr-mode")&&!document.querySelector(".app")?.classList.contains("branches-mode"))renderRecentHistory();
+  // Auto-default to the History/Activity view only on the FIRST load. On a refresh, softRefresh()
+  // restores whatever tab you were on — so refreshing on Records (with nothing selected) must not
+  // yank you to History.
+  if(!isRefresh&&!S.sel&&!document.querySelector(".app")?.classList.contains("pr-mode")&&!document.querySelector(".app")?.classList.contains("branches-mode"))renderRecentHistory();
 }
 
 function branchNames(){return [...new Set((S.branches.length?S.branches.map(b=>b.name):["main"]).filter(Boolean))];}
@@ -1771,7 +1774,16 @@ $("find").addEventListener("input",e=>{S.q=e.target.value;renderTree();});
 // Reload state from the server but stay on the current tab/record — used by the Refresh
 // button and by auto-refresh so new drift/branches/PRs (created in a terminal or another
 // tab) show up without a manual reload.
-function softRefresh(){const keep=S.sel, prMode=inPrMode(), branchesMode=inBranchesMode();return loadState().then(()=>{if(prMode)renderPrWorkspace();else if(branchesMode)renderBranchesWorkspace();else if(keep)selectRecord(keep);});}
+function inActivityMode(){return $("navHistoryTab")?.classList.contains("on");}
+function softRefresh(){const keep=S.sel, prMode=inPrMode(), branchesMode=inBranchesMode(), activityMode=inActivityMode();
+  return loadState(true).then(()=>{
+    if(prMode){renderPrWorkspace();return;}
+    if(branchesMode){renderBranchesWorkspace();return;}
+    if(activityMode){renderRecentHistory();return;}
+    if(keep){selectRecord(keep);return;}
+    // Records tab with nothing selected: stay put (tree already re-rendered above).
+    setNav("navRecordsTab");
+  });}
 $("refresh").onclick=()=>softRefresh();
 // Auto-refresh: pick up out-of-band changes without a manual reload. We skip while a modal
 // is open or a diff/impact panel is loading so we never yank the view out from under you.
