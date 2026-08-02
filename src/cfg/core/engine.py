@@ -452,11 +452,13 @@ class Engine:
 
     def status(self, ref: RecordRef | None = None) -> list[StatusRow]:
         refs = [ref] if ref else self._all_refs(include_history=True)
+        live_by_ref, head_by_ref = self._batch_live_and_heads(refs)
         rows: list[StatusRow] = []
         for item in refs:
             coll = self.config.collection(item.collection)
-            live = self.adapter.get_record(item.collection, item.record_id)
-            head = self.adapter.get_head(item.collection, item.record_id)
+            key = (item.collection, item.record_id)
+            live = live_by_ref.get(key)
+            head = head_by_ref.get(key)
             live_oid = hash_doc(live, coll) if live else None
             head_oid = head.get("oid") if head else None
             head_seq = head.get("seq") if head else None
@@ -472,6 +474,41 @@ class Engine:
                 state = "clean"
             rows.append(StatusRow(item.collection, item.record_id, state, live_oid, head_oid, head_seq))
         return sorted(rows, key=lambda r: (r.collection, r.record_id))
+
+    def _batch_live_and_heads(
+        self, refs: list[RecordRef]
+    ) -> tuple[dict[tuple[str, str], dict], dict[tuple[str, str], dict]]:
+        """Fetch live docs and heads for many refs with as few round-trips as the adapter
+        allows. If the adapter exposes batch get_records/get_heads, use one query per
+        collection; otherwise fall back to per-record reads so any adapter still works.
+
+        This is what keeps `cfg status` (and the UI's /api/state on launch) from doing a
+        per-record N+1 against a remote store.
+        """
+        live_by_ref: dict[tuple[str, str], dict] = {}
+        head_by_ref: dict[tuple[str, str], dict] = {}
+        by_collection: dict[str, list[str]] = {}
+        for item in refs:
+            by_collection.setdefault(item.collection, []).append(item.record_id)
+
+        batch_records = getattr(self.adapter, "get_records", None)
+        batch_heads = getattr(self.adapter, "get_heads", None)
+        if callable(batch_records) and callable(batch_heads):
+            for collection, record_ids in by_collection.items():
+                for rid, live in batch_records(collection, record_ids).items():
+                    live_by_ref[(collection, rid)] = live
+                for rid, head in batch_heads(collection, record_ids).items():
+                    head_by_ref[(collection, rid)] = head
+            return live_by_ref, head_by_ref
+
+        for item in refs:
+            live = self.adapter.get_record(item.collection, item.record_id)
+            if live is not None:
+                live_by_ref[(item.collection, item.record_id)] = live
+            head = self.adapter.get_head(item.collection, item.record_id)
+            if head is not None:
+                head_by_ref[(item.collection, item.record_id)] = head
+        return live_by_ref, head_by_ref
 
     def import_records(
         self,

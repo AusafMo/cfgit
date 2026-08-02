@@ -99,6 +99,54 @@ class PostgresAdapter:
             cur.execute(sql, self._live_params(collection))
             return [str(row["record_id"]) for row in cur.fetchall() if row["record_id"] is not None]
 
+    def get_records(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_record: one runtime query for many ids instead of one per id.
+
+        Raises AmbiguousConfig if any id resolves to more than one live row, matching
+        get_record's single-row guarantee. Ids with no live row are simply absent.
+        """
+        if not record_ids:
+            return {}
+        coll = self.project.collection(collection)
+        ids = list(record_ids)
+        sql = (
+            f"SELECT {_ident(coll.id_field)} AS record_id, doc FROM {_ident(collection)} "
+            f"WHERE {_ident(coll.id_field)} = ANY(%s) AND {self._live_where(collection)}"
+        )
+        params: list[Any] = [ids, *self._live_params(collection)]
+        with self.conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        out: dict[str, dict] = {}
+        for row in rows:
+            rid = str(row["record_id"])
+            if rid in out:
+                raise AmbiguousConfig(f"{collection}:{rid}")
+            out[rid] = dict(row["doc"])
+        return out
+
+    def get_heads(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_head: one history-store query for many ids instead of one per id."""
+        if not record_ids:
+            return {}
+        ids = list(record_ids)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT h.*
+                FROM {self.history_table} h
+                JOIN {self.heads_table} p
+                  ON p.env = h.env
+                 AND p.collection_name = h.collection_name
+                 AND p.record_id = h.record_id
+                 AND p.head_seq = h.seq
+                WHERE p.env = %s AND p.collection_name = %s AND p.record_id = ANY(%s)
+                """,
+                [self.env_name, collection, ids],
+            )
+            rows = cur.fetchall()
+        return {str(row["record_id"]): _history_row(row) for row in rows}
+
     def get_head(self, collection: str, record_id: str) -> dict | None:
         with self.conn.cursor() as cur:
             cur.execute(

@@ -68,6 +68,53 @@ class MongoAdapter:
         values = self.db[collection].distinct(coll.id_field, coll.live_when)
         return sorted(str(v) for v in values if v is not None)
 
+    def get_records(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_record: one runtime query for many ids instead of one per id.
+
+        Raises AmbiguousConfig if any id resolves to more than one live doc, matching
+        get_record's single-doc guarantee. Ids with no live doc are simply absent.
+        """
+        if not record_ids:
+            return {}
+        coll = self.project.collection(collection)
+        query = {coll.id_field: {"$in": list(record_ids)}, **coll.live_when}
+        out: dict[str, dict] = {}
+        for doc in self.db[collection].find(query):
+            rid = str(doc.get(coll.id_field))
+            if rid in out:
+                raise AmbiguousConfig(f"{collection}:{rid}")
+            out[rid] = doc
+        return out
+
+    def get_heads(self, collection: str, record_ids: list[str]) -> dict[str, dict]:
+        """Batch of get_head: two history-store queries total (head pointers, then the
+        pointed-to history rows) instead of two per id."""
+        if not record_ids:
+            return {}
+        ids = list(record_ids)
+        ptrs = list(
+            self.heads.find(
+                {"env": self.env_name, "collection": collection, "record_id": {"$in": ids}}
+            )
+        )
+        if not ptrs:
+            return {}
+        want = {str(p["record_id"]): p["head_seq"] for p in ptrs}
+        rows = self.history.find(
+            {
+                "env": self.env_name,
+                "collection": collection,
+                "record_id": {"$in": list(want)},
+                "seq": {"$in": sorted(set(want.values()))},
+            }
+        )
+        out: dict[str, dict] = {}
+        for row in rows:
+            rid = str(row["record_id"])
+            if want.get(rid) == row["seq"]:
+                out[rid] = _history_row(row, with_doc=True)
+        return out
+
     def get_head(self, collection: str, record_id: str) -> dict | None:
         ptr = self.heads.find_one(self._head_query(collection, record_id))
         if not ptr:
